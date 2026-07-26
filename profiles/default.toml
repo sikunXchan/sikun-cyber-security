@@ -1,0 +1,20 @@
+# デフォルト・プロファイル
+# --profile を指定せずに起動したときに使われます。
+# 自分専用のエージェントを作るには: python main.py --init <名前>
+
+name = "default"
+
+# 使用するモデルプロバイダ: "gemini"(安価・既定) または "claude"
+provider = "gemini"
+
+# モデルの明示指定(任意)。省略時はプロバイダの既定モデルを使う。
+# model = "gemini-3.5-flash"
+
+# エージェント固有の性格・方針(システムプロンプトに追記)。既定は指定なし。
+persona = ""
+
+# RAG が参照する知識ベースのディレクトリ。
+knowledge_base = "knowledge_base"
+
+# プラグイン(自作ツール)を読み込むディレクトリ一覧。
+plugins = ["plugins"]

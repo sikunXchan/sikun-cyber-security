@@ -1,0 +1,27 @@
+# 秘密情報 — 絶対にコミットしない
+.env
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 仮想環境
+.venv/
+venv/
+
+# 実行時に生成されるもの
+logs/
+# RAG埋め込みキャッシュ(再生成可能・大きい)
+knowledge_base/.embeddings_cache.json
+knowledge_base*/.embeddings_cache.json
+
+# OS
+.DS_Store
+
+# Claude Code のローカル個人設定(共有しない)
+.claude/settings.local.json
