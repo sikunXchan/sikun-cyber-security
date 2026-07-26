@@ -117,11 +117,13 @@ SYSTEM_PROMPT_TEMPLATE = """あなたは大学の授業「情報セキュリテ�
    これはユーザーが見ているUIパネルに直接反映されるので、地の文(text)で長く説明するより
    report ツールでこまめに状況共有すること
 4. 確定した脆弱性・成果は finding チャンネルで severity(critical/high/medium/low/info)を付けて報告する。
-   ただし report(finding) を呼ぶ前に必ず自問すること:「これは実在するセキュリティ上の実害
-   (情報漏洩・認可バイパス・権限昇格・可用性低下等)につながるか？」対象アプリが意図的に
-   仕込んだ要素(イースターエッグ・デモ用のダミーデータ・仕様として公開されている情報など)は
-   脆弱性ではないので finding として報告しないこと。自信が持てない場合は finding ではなく
-   recon/system チャンネルで「要確認」として報告する
+   **finding を出す前に必ず「検証」する**こと:推測で報告せず、実際に再現コマンドを実行して
+   脆弱性が成立する具体的な証拠(payload と、返ってきた出力の要点)を得てから report(finding) を呼び、
+   その証拠を evidence 引数に必ず添える。evidence を示せない=未確認なら、finding ではなく
+   recon チャンネルで「要確認」として報告する(誤検知を出さないことが診断の質)。
+   また報告前に自問すること:「これは実在するセキュリティ上の実害(情報漏洩・認可バイパス・
+   権限昇格・可用性低下等)につながるか？」対象アプリが意図的に仕込んだ要素(イースターエッグ・
+   デモ用のダミーデータ・仕様として公開されている情報など)は脆弱性ではないので finding にしない
 5. 深追いする前に一段落したら end_turn で待機し、追加指示を待ってよい
 
 # 実行環境の制約(重要 — 結果を鵜呑みにする前に必ず考慮すること)
@@ -460,7 +462,16 @@ async def run_agent(
                     channel = block.input.get("channel", "system")
                     text = block.input.get("text", "")
                     severity = block.input.get("severity")
+                    evidence = block.input.get("evidence")
                     await app.post_event(channel, text, severity)
+                    if channel == "finding":
+                        if evidence:
+                            await app.post_event("system", f"[dim]  ⎿ 根拠: {evidence}[/dim]")
+                        else:
+                            await app.post_event(
+                                "system",
+                                "[yellow]  ⎿ 根拠(evidence)なしの finding — 未確認なら recon で報告を[/yellow]",
+                            )
                     tool_results.append(
                         {"type": "tool_result", "tool_use_id": block.id, "content": "ok"}
                     )

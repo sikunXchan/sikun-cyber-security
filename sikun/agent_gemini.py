@@ -116,6 +116,13 @@ REPORT_DECLARATION = types.FunctionDeclaration(
                 "enum": ["critical", "high", "medium", "low", "info"],
                 "description": "finding の場合の重要度(任意)",
             },
+            "evidence": {
+                "type": "string",
+                "description": (
+                    "finding の場合は必須。脆弱性を裏付ける再現コマンドとその出力の要点。"
+                    "これを示せない=未確認なら、finding ではなく recon で『要確認』として報告する"
+                ),
+            },
         },
         "required": ["channel", "text"],
     },
@@ -704,7 +711,16 @@ async def _run_loop(
                     channel = args.get("channel", "system")
                     text = args.get("text", "")
                     severity = args.get("severity")
+                    evidence = args.get("evidence")
                     await app.post_event(channel, text, severity)
+                    if channel == "finding":
+                        if evidence:
+                            await app.post_event("system", f"[dim]  ⎿ 根拠: {evidence}[/dim]")
+                        else:
+                            await app.post_event(
+                                "system",
+                                "[yellow]  ⎿ 根拠(evidence)なしの finding — 未確認なら recon で報告を[/yellow]",
+                            )
                     function_response_parts.append(
                         types.Part.from_function_response(name=fc.name, response={"result": "ok"})
                     )

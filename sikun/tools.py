@@ -40,6 +40,14 @@ REPORT_TOOL = {
                 "enum": ["critical", "high", "medium", "low", "info"],
                 "description": "finding の場合の重要度(任意)",
             },
+            "evidence": {
+                "type": "string",
+                "description": (
+                    "finding の場合は必須。脆弱性を裏付ける再現コマンドとその出力の要点"
+                    "(例: 実行した payload と、返ってきた具体的な証拠)。これを示せない"
+                    "=未確認なら、finding ではなく recon チャンネルで『要確認』として報告する"
+                ),
+            },
         },
         "required": ["channel", "text"],
     },

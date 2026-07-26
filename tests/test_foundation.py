@@ -379,6 +379,68 @@ def test_detection_rule_saves_file():
         saved.unlink(missing_ok=True)
 
 
+def test_report_tool_has_evidence_field():
+    # finding verification loop: report must accept an `evidence` arg on both backends
+    from sikun.tools import REPORT_TOOL
+
+    assert "evidence" in REPORT_TOOL["input_schema"]["properties"]
+    import sikun.agent_gemini as ag
+
+    params = ag.REPORT_DECLARATION.parameters
+    props = params["properties"] if isinstance(params, dict) else params.properties
+    assert "evidence" in props
+
+
+def test_privesc_enum_parses_and_flags_notable():
+    from sikun.plugins import _import_file
+
+    mod = _import_file(PROJECT_ROOT / "plugins" / "privesc_enum.py")
+    raw = "\n".join(
+        [
+            "[exit=0]",
+            "###ID###",
+            "uid=1000(user) gid=1000(user) groups=1000(user)",
+            "###SUDO###",
+            "User user may run the following commands:",
+            "    (root) NOPASSWD: /usr/bin/find",
+            "###SUID###",
+            "/usr/bin/find",
+            "/usr/bin/passwd",
+            "/usr/bin/sudo",
+            "###KERNEL###",
+            "Linux box 5.4.0-42-generic x86_64",
+            "###CAPS###",
+            "/usr/bin/python3.8 = cap_setuid+ep",
+            "###PASSWD###",
+            "-rw-r--r-- 1 root root 2000 /etc/passwd",
+            "-rw-r----- 1 root shadow 1000 /etc/shadow",
+            "###WORLD_WRITABLE###",
+            "###DONE###",
+        ]
+    )
+    sections = mod._parse_sections(raw)
+    assert "uid=1000" in sections["ID"]
+    notable = mod._analyze(sections)
+    joined = " ".join(notable)
+    assert "NOPASSWD" in joined
+    assert "find" in joined  # GTFOBins SUID hit
+    assert "cap_setuid" in joined
+
+
+def test_privesc_enum_run_and_scope():
+    plugin = {p.name: p for p in load_plugins([PROJECT_ROOT / "plugins"]).plugins}["privesc_enum"]
+    assert plugin.scope_targets is not None and plugin.scope_targets({}) == []
+
+    async def fake_run(cmd: str) -> str:
+        assert "###ID###" in cmd  # runs the combined enumeration script
+        return "[exit=0]\n###ID###\nuid=0(root)\n###SUID###\n/bin/bash\n###DONE###"
+
+    ctx = PluginContext(target="10.0.0.5", ssh_host=None, workdir=Path.home(), run=fake_run)
+    out = asyncio.run(plugin.run({}, ctx))
+    assert "uid=0(root)" in out["host_user"]
+    assert any("bash" in n for n in out["notable"])  # /bin/bash SUID flagged
+
+
 def _main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
