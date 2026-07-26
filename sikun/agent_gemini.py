@@ -768,7 +768,9 @@ async def _run_loop(
                     await app.post_event("system", render_tool_call(f"http_probe(url={probe_url})"))
                     probe_result = await run_http_probe(probe_url, ssh_host=ssh_host)
                     summary = (
-                        f"status={probe_result['status']} title={probe_result['title'] or '(なし)'} "
+                        f"status={probe_result['status']} "
+                        f"server={probe_result.get('server') or '(不明)'} "
+                        f"title={probe_result['title'] or '(なし)'} "
                         f"tech={', '.join(probe_result['tech_hints']) or '(不明)'}"
                     )
                     await app.post_event("system", render_tool_result(summary))

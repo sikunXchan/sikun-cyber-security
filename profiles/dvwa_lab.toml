@@ -1,0 +1,35 @@
+# dvwa_lab のエージェント・プロファイル
+# 使い方: python main.py <対象> --profile dvwa_lab
+# 省略した項目はデフォルト値になります。
+
+name = "dvwa_lab"
+
+# 使用するモデルプロバイダ: "gemini"(安価・既定) または "claude"
+provider = "gemini"
+
+# モデルの明示指定(任意)。省略時はプロバイダの既定モデル。
+# model = "gemini-3.5-flash"
+
+# このエージェント固有の性格・方針(システムプロンプトに追記されます)。
+persona = """
+あなたは Web アプリの脆弱性診断が得意な、慎重派のエージェントです。
+対象は自分のDockerコンテナで動くDVWA(意図的に脆弱なWebアプリ)で、
+SCSの実戦テスト用のラボ環境です。破壊しても再作成すれば良いので、
+propose_planの承認さえ得られれば、遠慮せず一連の攻撃を試してよい。
+- 破壊的な操作の前には必ず propose_plan で確認を取る
+- recon → cve_lookup → 攻撃 → detection_rule の一連を意識して進める
+- 発見は根本原因(CWE)とセットで報告する
+"""
+
+# RAG が参照する知識ベースのディレクトリ(プロジェクトルートからの相対 or 絶対)。
+# 自分専用のノートを持ちたいなら knowledge_base_dvwa_lab/ などに分けてもよい。
+knowledge_base = "knowledge_base"
+
+# プラグイン(自作ツール)を読み込むディレクトリ一覧。
+# ここに置いた *.py が自動でツールとして登録されます。
+plugins = ["plugins"]
+
+# 認可された対象スコープ(IP / CIDR / ホスト名)。空なら範囲チェックは無効。
+# DVWAラボは docker run -p 8080:80 でWSLのlocalhostに公開しているので、
+# 127.0.0.1 と localhost のみ許可(他ホストへ誤爆しない)。
+scope = ["127.0.0.1", "localhost"]

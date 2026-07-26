@@ -343,9 +343,19 @@ async def run_http_probe(url: str, ssh_host: str | None = None) -> dict:
     if match:
         title = re.sub(r"\s+", " ", match.group(1)).strip()
 
+    # Surface the Server header (usually version-bearing, e.g. "Apache/2.4.49")
+    # as a first-class field — the version is exactly what cve_lookup needs, and
+    # tech_hints alone (bare "Apache") dropped it, so the model would look up the
+    # app name instead of the middleware+version. Also expose x-powered-by
+    # (PHP/ASP.NET versions live there).
+    server = next((v for k, v in headers.items() if k.lower() == "server"), "")
+    powered_by = next((v for k, v in headers.items() if k.lower() == "x-powered-by"), "")
+
     return {
         "url": url,
         "status": status,
+        "server": server,
+        "x_powered_by": powered_by,
         "headers": headers,
         "title": title,
         "tech_hints": _guess_tech(headers, body),

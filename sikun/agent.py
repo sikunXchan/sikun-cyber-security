@@ -107,7 +107,12 @@ SYSTEM_PROMPT_TEMPLATE = """あなたは大学の授業「情報セキュリテ�
 
 # 行動方針
 1. 偵察(recon) → 脆弱性特定 → 攻撃(exploit) → 成果報告(finding) の順で段階的に進める
-2. 実際のコマンド実行は bash ツールを使う
+2. 偵察では nmap_scan / http_probe / dir_enum などの構造化ツールを優先して使う(生bashより
+   パース済みで確実)。そこでサービス名やミドルウェアのバージョン(例: Apache 2.4.49,
+   OpenSSH 8.2p1, PHP 7.4)を掴んだら、そのバージョン付き製品名で cve_lookup を呼んで
+   既知の脆弱性を確認すること。cve_lookup に渡すのはアプリの通称(例: dvwa)ではなく、
+   nmap_scan/http_probe で判明した**ミドルウェア/サービスの製品名+バージョン**。
+   それ以外の実コマンド実行は bash ツールを使う
 3. 各ステップの状況・発見事項は必ず report ツールで該当チャンネル(recon/exploit/finding/system)に報告する。
    これはユーザーが見ているUIパネルに直接反映されるので、地の文(text)で長く説明するより
    report ツールでこまめに状況共有すること

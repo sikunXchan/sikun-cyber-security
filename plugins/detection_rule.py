@@ -70,7 +70,10 @@ def _parse_selection(text: str) -> dict:
             continue
         key, value = line.split(":", 1)
         key, value = key.strip(), value.strip()
-        if not key:
+        # Skip empty match values — `field|contains: ""` matches everything and
+        # makes a useless (noisy) rule; observed in real runs. A field that must
+        # merely exist should be expressed with a non-empty value.
+        if not key or not value or value in ('""', "''"):
             continue
         if "," in value:
             selection[key] = [x.strip() for x in value.split(",") if x.strip()]

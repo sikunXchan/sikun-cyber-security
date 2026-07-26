@@ -160,17 +160,23 @@ def _summary(result) -> str:
 PLUGIN = ToolPlugin(
     name="cve_lookup",
     description=(
-        "recon で判明した製品名+バージョンから、既知のCVE/エクスプロイト候補を検索して"
-        "構造化して返す(recon→exploitの橋渡し)。ローカルに searchsploit があればそれを"
-        "優先し、無ければ NVD 公開APIに問い合わせる。ポートスキャンでサービスとバージョンが"
-        "分かったら、次にこのツールを使って攻撃可能性を調べるとよい。演習ホスト自体には接触しない。"
+        "nmap_scan/http_probe で判明した**ミドルウェア/サービスの製品名+バージョン**から、"
+        "既知のCVE/エクスプロイト候補を検索して構造化して返す(recon→exploitの橋渡し)。"
+        "重要: 渡すのは対象アプリの通称(例: dvwa, wordpressサイト名)ではなく、その裏で動く"
+        "ソフトの製品名(例: apache, nginx, openssh, mysql, php, vsftpd)。http_probe の server "
+        "フィールドや nmap_scan の version からバージョンも一緒に渡すとヒット率が上がる。"
+        "ローカルに searchsploit があれば優先し、無ければ NVD 公開APIに問い合わせる。"
+        "演習ホスト自体には接触しない。"
     ),
     parameters={
         "type": "object",
         "properties": {
             "product": {
                 "type": "string",
-                "description": "製品/サービス名(例: vsftpd, apache, openssh)",
+                "description": (
+                    "ミドルウェア/サービスの製品名(例: apache, nginx, openssh, mysql, php, vsftpd)。"
+                    "対象アプリの通称ではなくその裏で動くソフト名を渡す"
+                ),
             },
             "version": {
                 "type": "string",

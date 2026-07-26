@@ -116,6 +116,27 @@ def test_guess_tech_from_fingerprints():
     assert "nginx" in tech and "PHP" in tech
 
 
+def test_http_probe_surfaces_server_version():
+    # http_probe must expose the version-bearing Server / X-Powered-By headers as
+    # first-class fields so cve_lookup gets middleware+version, not just "Apache".
+    from unittest import mock
+
+    from sikun import tools
+
+    raw = (
+        "__SIKUN_HEADERS__\nHTTP/1.1 200 OK\r\nServer: Apache/2.4.49\r\n"
+        "X-Powered-By: PHP/7.4.3\r\n\r\n__SIKUN_BODY__<title>x</title>"
+    )
+
+    async def fake_bash(*a, **k):
+        return raw
+
+    with mock.patch.object(tools, "run_bash", fake_bash):
+        result = asyncio.run(tools.run_http_probe("http://127.0.0.1:8080"))
+    assert result["server"] == "Apache/2.4.49"
+    assert result["x_powered_by"] == "PHP/7.4.3"
+
+
 def test_tui_board_tracks_state():
     async def run():
         app = SikunApp(target="192.168.56.10", profile_name="default")
@@ -324,6 +345,9 @@ def test_detection_rule_parse_selection_list_and_validation():
     sel = mod._parse_selection("DestinationPort: 80,443,8080\nUser: root")
     assert sel["DestinationPort"] == ["80", "443", "8080"]
     assert sel["User"] == "root"
+    # empty match values are skipped (a `field: ""` rule matches everything)
+    sel2 = mod._parse_selection('a|contains: -sS\nb|contains:\nc|contains: ""')
+    assert sel2 == {"a|contains": "-sS"}
 
     async def noop_run(cmd: str) -> str:
         return ""
