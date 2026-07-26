@@ -184,8 +184,17 @@ class PersistentShell:
                     lines.append("\n[シェルプロセスが予期せず終了しました]")
                     break
                 text = raw_line.decode(errors="replace")
-                if text.startswith(marker):
-                    exit_code = text.strip().split(":", 1)[-1]
+                # The marker may not sit at the start of a line: a command whose
+                # output lacks a trailing newline (e.g. `curl` of a JSON body)
+                # leaves the marker echo concatenated onto that last output line.
+                # Match it anywhere and keep whatever real output preceded it,
+                # otherwise readline() waits forever for a marker line that never
+                # comes and the call dead-hangs until timeout.
+                if marker in text:
+                    before, _, after = text.partition(marker)
+                    if before:
+                        lines.append(before)
+                    exit_code = after.strip().split(":", 1)[-1] or "?"
                     break
                 lines.append(text)
         except asyncio.TimeoutError:

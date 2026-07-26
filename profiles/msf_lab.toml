@@ -1,0 +1,35 @@
+# msf_lab のエージェント・プロファイル
+# 使い方: python main.py <対象> --profile msf_lab
+# 省略した項目はデフォルト値になります。
+
+name = "msf_lab"
+
+# 使用するモデルプロバイダ: "gemini"(安価・既定) または "claude"
+provider = "gemini"
+
+# モデルの明示指定(任意)。省略時はプロバイダの既定モデル。
+# model = "gemini-3.5-flash"
+
+# このエージェント固有の性格・方針(システムプロンプトに追記されます)。
+persona = """
+対象は自分のDockerで動く Metasploitable2(意図的に脆弱なVM)で、SCSの実戦テスト用
+ラボ環境です。実CVEを持つ古いサービスが多数動いています。破壊しても再作成すれば
+良いので、propose_plan の承認さえ得られれば遠慮なく攻撃を試してよい。
+- まず nmap_scan で全ポート・サービスバージョンを列挙する
+- 判明したミドルウェア/サービスの製品名+バージョンで必ず cve_lookup を呼ぶ
+  (例: proftpd 1.3.1, samba 3.0.20, unrealircd 3.2.8.1, mysql 5.0.51a)
+- finding は再現の証拠(evidence)を添えてから報告する
+- 破壊的操作の前は propose_plan で確認を取る
+"""
+
+# RAG が参照する知識ベースのディレクトリ(プロジェクトルートからの相対 or 絶対)。
+# 自分専用のノートを持ちたいなら knowledge_base_msf_lab/ などに分けてもよい。
+knowledge_base = "knowledge_base"
+
+# プラグイン(自作ツール)を読み込むディレクトリ一覧。
+# ここに置いた *.py が自動でツールとして登録されます。
+plugins = ["plugins"]
+
+# 認可された対象スコープ。Metasploitable2 コンテナのIPのみ許可(他への誤爆を防ぐ)。
+# コンテナ再作成でIPが変わったら docker inspect で確認して更新すること。
+scope = ["172.17.0.2"]

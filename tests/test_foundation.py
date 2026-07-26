@@ -243,21 +243,11 @@ def test_cve_lookup_parsers_tolerate_exit_prefix():
     got = mod._parse_searchsploit_json(ss_raw, 15)
     assert got and got[0]["id"] == "17491" and got[0]["source"] == "exploit-db"
 
-    nvd_raw = "[exit=0]\n" + json.dumps(
-        {
-            "vulnerabilities": [
-                {
-                    "cve": {
-                        "id": "CVE-2011-2523",
-                        "descriptions": [{"lang": "en", "value": "vsftpd 2.3.4 backdoor"}],
-                        "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8, "baseSeverity": "CRITICAL"}}]},
-                    }
-                }
-            ]
-        }
-    )
-    got = mod._parse_nvd_json(nvd_raw, 15)
-    assert got and got[0]["id"] == "CVE-2011-2523" and got[0]["severity"] == "CRITICAL"
+    # NVD path now extracts CVE IDs via grep on the target -> one ID per line
+    nvd_raw = "[exit=0]\nCVE-2011-2523\nCVE-2021-41773\nCVE-2011-2523\n"
+    got = mod._parse_nvd_ids(nvd_raw, 15)
+    assert [c["id"] for c in got] == ["CVE-2011-2523", "CVE-2021-41773"]  # dedup, order kept
+    assert all(c["source"] == "nvd" for c in got)
 
 
 def _cve_plugin():
@@ -277,9 +267,8 @@ def test_cve_lookup_merges_sources_when_searchsploit_present():
                 {"RESULTS_EXPLOIT": [{"Title": "vsftpd 2.3.4 - Backdoor", "EDB-ID": "17491", "Path": "/x.rb"}]}
             )
         if "nist.gov" in cmd:
-            return "[exit=0]\n" + json.dumps(
-                {"vulnerabilities": [{"cve": {"id": "CVE-2011-2523", "descriptions": [{"lang": "en", "value": "backdoor"}], "metrics": {}}}]}
-            )
+            assert "grep -oE" in cmd  # NVD path extracts IDs on the target
+            return "[exit=0]\nCVE-2011-2523\n"
         return "[exit=0]\n"
 
     ctx = PluginContext(target="10.0.0.5", ssh_host=None, workdir=Path.home(), run=fake_run)
@@ -296,7 +285,7 @@ def test_cve_lookup_falls_back_when_no_searchsploit():
         if "command -v searchsploit" in cmd:
             return "[exit=0]\nnone"
         if "nist.gov" in cmd:
-            return "[exit=0]\n" + json.dumps({"vulnerabilities": []})
+            return "[exit=0]\n"  # grep found no CVE IDs
         return "[exit=0]\n"
 
     ctx = PluginContext(target="10.0.0.5", ssh_host=None, workdir=Path.home(), run=fake_run)

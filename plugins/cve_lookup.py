@@ -15,9 +15,13 @@ scope_targets は空 = スコープ強制の対象外。
 from __future__ import annotations
 
 import json
+import re
 import shlex
 
 from sikun.plugins import PluginContext, ToolPlugin
+
+_NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+_CVE_RE = re.compile(r"CVE-\d{4}-\d{3,7}")
 
 
 def _extract_json(raw: str) -> str:
@@ -53,40 +57,34 @@ def _parse_searchsploit_json(raw: str, max_results: int) -> list[dict]:
     return out
 
 
-def _parse_nvd_json(raw: str, max_results: int) -> list[dict]:
-    blob = _extract_json(raw)
-    if not blob:
-        return []
-    try:
-        data = json.loads(blob)
-    except (ValueError, TypeError):
-        return []
+def _nvd_id_command(query: str, n: int) -> str:
+    """Build the NVD query, extracting only the primary CVE IDs on the target
+    with grep. NVD returns very verbose JSON (full descriptions/references per
+    CVE) that easily exceeds the shell's output-truncation limit and gets
+    corrupted before it reaches us — so we reduce it to a tiny list of IDs at
+    the source. grep is dependency-free (unlike jq/python on a pivot). The
+    `"id":"CVE-..."` pattern targets the primary id field, not CVE IDs merely
+    mentioned inside another entry's references/description."""
+    return (
+        f"curl -sS -G --max-time 20 {_NVD_URL} "
+        f"--data-urlencode {shlex.quote('keywordSearch=' + query)} "
+        f"--data-urlencode {shlex.quote('resultsPerPage=' + str(n))} 2>/dev/null "
+        r"""| grep -oE '"id":"CVE-[0-9]{4}-[0-9]{3,7}"' """
+        r"""| grep -oE 'CVE-[0-9]{4}-[0-9]{3,7}' """
+        f"| head -n {n}"
+    )
+
+
+def _parse_nvd_ids(raw: str, max_results: int) -> list[dict]:
     out: list[dict] = []
-    for entry in (data.get("vulnerabilities") or [])[:max_results]:
-        cve = (entry or {}).get("cve") or {}
-        description = ""
-        for d in cve.get("descriptions") or []:
-            if d.get("lang") == "en":
-                description = d.get("value", "")
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        m = _CVE_RE.search(line)
+        if m and m.group(0) not in seen:
+            seen.add(m.group(0))
+            out.append({"source": "nvd", "id": m.group(0)})
+            if len(out) >= max_results:
                 break
-        severity, score = "", None
-        metrics = cve.get("metrics") or {}
-        for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
-            arr = metrics.get(key)
-            if arr:
-                cvss = (arr[0] or {}).get("cvssData") or {}
-                score = cvss.get("baseScore")
-                severity = cvss.get("baseSeverity") or (arr[0] or {}).get("baseSeverity") or ""
-                break
-        out.append(
-            {
-                "source": "nvd",
-                "id": cve.get("id", ""),
-                "severity": severity,
-                "score": score,
-                "title": description[:200],
-            }
-        )
     return out
 
 
@@ -119,19 +117,12 @@ async def _run(args: dict, ctx: PluginContext) -> dict:
     else:
         notes.append("searchsploit 未インストール(exploit-db検索はスキップ)")
 
-    # 2) NVD 公開API — searchsploit で埋まらない分を補う
+    # 2) NVD 公開API — searchsploit で埋まらない分を補う(CVE IDのみ抽出)
     if len(candidates) < max_results:
         remaining = max_results - len(candidates)
         sources_tried.append("nvd")
-        nvd_cmd = (
-            "curl -sS -G --max-time 20 "
-            "https://services.nvd.nist.gov/rest/json/cves/2.0 "
-            f"--data-urlencode {shlex.quote('keywordSearch=' + query)} "
-            f"--data-urlencode {shlex.quote('resultsPerPage=' + str(remaining))} "
-            "2>/dev/null"
-        )
-        raw = await ctx.run(nvd_cmd)
-        nvd = _parse_nvd_json(raw, remaining)
+        raw = await ctx.run(_nvd_id_command(query, remaining))
+        nvd = _parse_nvd_ids(raw, remaining)
         if not nvd:
             notes.append("NVDからの結果なし(ネットワーク制限、curl未導入、またはヒットなし)")
         candidates.extend(nvd)
