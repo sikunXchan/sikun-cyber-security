@@ -79,6 +79,8 @@ PLUGIN = ToolPlugin(
 
 - **`cve_lookup`** — recon で判明した製品名+バージョンから既知CVE/エクスプロイト候補を検索
   (searchsploit があれば優先、無ければ NVD 公開API)。recon→exploit の橋渡し
+- **`detection_rule`** — 実行した攻撃を検知する Sigma ルールを生成して `detections/` に保存
+  (パープル)。自分の攻撃がどのログ/フィールドで捕捉されるか分かる
 - **`reverse_dns`** — IPの逆引き(プラグインの書き方サンプル)
 
 ## 安全装置(スコープ強制)

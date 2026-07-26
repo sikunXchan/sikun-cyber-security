@@ -284,6 +284,77 @@ def test_cve_lookup_falls_back_when_no_searchsploit():
     assert any("searchsploit" in n for n in out["notes"])
 
 
+def _detection_plugin():
+    return {p.name: p for p in load_plugins([PROJECT_ROOT / "plugins"]).plugins}["detection_rule"]
+
+
+def test_detection_rule_builds_valid_sigma():
+    plugin = _detection_plugin()
+    assert plugin.scope_targets is not None and plugin.scope_targets({}) == []
+
+    async def noop_run(cmd: str) -> str:
+        return ""
+
+    ctx = PluginContext(target="10.0.0.5", ssh_host=None, workdir=Path.home(), run=noop_run)
+    out = asyncio.run(
+        plugin.run(
+            {
+                "title": "Nmap SYN scan",
+                "selection": "CommandLine|contains: -sS\nImage|endswith: /nmap",
+                "logsource_category": "process_creation",
+                "logsource_product": "linux",
+                "level": "medium",
+                "tags": "attack.t1046 attack.discovery",
+                "save": False,
+            },
+            ctx,
+        )
+    )
+    assert out["saved_to"] is None  # save=False
+    assert out["data_source"]["watched_fields"] == ["CommandLine|contains", "Image|endswith"]
+    sigma = out["sigma"]
+    for needle in ("title:", "detection:", "selection:", "condition:", "level:", "process_creation", "attack.t1046"):
+        assert needle in sigma, (needle, sigma)
+
+
+def test_detection_rule_parse_selection_list_and_validation():
+    from sikun.plugins import _import_file
+
+    mod = _import_file(PROJECT_ROOT / "plugins" / "detection_rule.py")
+    sel = mod._parse_selection("DestinationPort: 80,443,8080\nUser: root")
+    assert sel["DestinationPort"] == ["80", "443", "8080"]
+    assert sel["User"] == "root"
+
+    async def noop_run(cmd: str) -> str:
+        return ""
+
+    ctx = PluginContext(target="x", ssh_host=None, workdir=Path.home(), run=noop_run)
+    # invalid level downgraded to medium with a note; empty selection -> error
+    out = asyncio.run(mod.PLUGIN.run({"title": "t", "selection": "A: 1", "level": "bogus", "save": False}, ctx))
+    assert out["level"] == "medium" and any("level" in n for n in out["notes"])
+    err = asyncio.run(mod.PLUGIN.run({"title": "t", "selection": "", "save": False}, ctx))
+    assert "error" in err
+
+
+def test_detection_rule_saves_file():
+    from sikun.plugins import _import_file
+
+    mod = _import_file(PROJECT_ROOT / "plugins" / "detection_rule.py")
+
+    async def noop_run(cmd: str) -> str:
+        return ""
+
+    ctx = PluginContext(target="x", ssh_host=None, workdir=Path.home(), run=noop_run)
+    out = asyncio.run(
+        mod.PLUGIN.run({"title": "unittest detrule tmp", "selection": "A: 1", "save": True}, ctx)
+    )
+    saved = PROJECT_ROOT / out["saved_to"]
+    try:
+        assert saved.exists() and saved.read_text().startswith("title:")
+    finally:
+        saved.unlink(missing_ok=True)
+
+
 def _main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
