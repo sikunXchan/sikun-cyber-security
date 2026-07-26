@@ -10,6 +10,7 @@ Every test is offline: the one plugin that shells out is driven with a fake
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 from pathlib import Path
 
@@ -205,6 +206,82 @@ def test_example_plugin_declares_scope_targets():
     rd = plugins["reverse_dns"]
     assert rd.scope_targets is not None
     assert rd.scope_targets({"ip": "1.2.3.4"}) == ["1.2.3.4"]
+
+
+def _load_cve_plugin():
+    from sikun.plugins import _import_file
+
+    return _import_file(PROJECT_ROOT / "plugins" / "cve_lookup.py")
+
+
+def test_cve_lookup_parsers_tolerate_exit_prefix():
+    mod = _load_cve_plugin()
+    ss_raw = "[exit=0]\n" + json.dumps(
+        {"RESULTS_EXPLOIT": [{"Title": "vsftpd 2.3.4 - Backdoor", "EDB-ID": "17491", "Path": "/x/17491.rb"}]}
+    )
+    got = mod._parse_searchsploit_json(ss_raw, 15)
+    assert got and got[0]["id"] == "17491" and got[0]["source"] == "exploit-db"
+
+    nvd_raw = "[exit=0]\n" + json.dumps(
+        {
+            "vulnerabilities": [
+                {
+                    "cve": {
+                        "id": "CVE-2011-2523",
+                        "descriptions": [{"lang": "en", "value": "vsftpd 2.3.4 backdoor"}],
+                        "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8, "baseSeverity": "CRITICAL"}}]},
+                    }
+                }
+            ]
+        }
+    )
+    got = mod._parse_nvd_json(nvd_raw, 15)
+    assert got and got[0]["id"] == "CVE-2011-2523" and got[0]["severity"] == "CRITICAL"
+
+
+def _cve_plugin():
+    return {p.name: p for p in load_plugins([PROJECT_ROOT / "plugins"]).plugins}["cve_lookup"]
+
+
+def test_cve_lookup_merges_sources_when_searchsploit_present():
+    plugin = _cve_plugin()
+    assert plugin.scope_targets is not None and plugin.scope_targets({"product": "x"}) == []
+
+    async def fake_run(cmd: str) -> str:
+        if "command -v searchsploit" in cmd:
+            return "[exit=0]\n/usr/bin/searchsploit"
+        if "searchsploit --json" in cmd:
+            assert "vsftpd" in cmd
+            return "[exit=0]\n" + json.dumps(
+                {"RESULTS_EXPLOIT": [{"Title": "vsftpd 2.3.4 - Backdoor", "EDB-ID": "17491", "Path": "/x.rb"}]}
+            )
+        if "nist.gov" in cmd:
+            return "[exit=0]\n" + json.dumps(
+                {"vulnerabilities": [{"cve": {"id": "CVE-2011-2523", "descriptions": [{"lang": "en", "value": "backdoor"}], "metrics": {}}}]}
+            )
+        return "[exit=0]\n"
+
+    ctx = PluginContext(target="10.0.0.5", ssh_host=None, workdir=Path.home(), run=fake_run)
+    out = asyncio.run(plugin.run({"product": "vsftpd", "version": "2.3.4"}, ctx))
+    ids = {c["id"] for c in out["candidates"]}
+    assert "17491" in ids and "CVE-2011-2523" in ids
+    assert out["sources_tried"] == ["searchsploit", "nvd"]
+
+
+def test_cve_lookup_falls_back_when_no_searchsploit():
+    plugin = _cve_plugin()
+
+    async def fake_run(cmd: str) -> str:
+        if "command -v searchsploit" in cmd:
+            return "[exit=0]\nnone"
+        if "nist.gov" in cmd:
+            return "[exit=0]\n" + json.dumps({"vulnerabilities": []})
+        return "[exit=0]\n"
+
+    ctx = PluginContext(target="10.0.0.5", ssh_host=None, workdir=Path.home(), run=fake_run)
+    out = asyncio.run(plugin.run({"product": "openssh"}, ctx))
+    assert "searchsploit" not in out["sources_tried"]
+    assert any("searchsploit" in n for n in out["notes"])
 
 
 def _main() -> int:

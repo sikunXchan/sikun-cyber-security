@@ -75,6 +75,12 @@ PLUGIN = ToolPlugin(
 
 同じプラグインが Claude / Gemini どちらのプロバイダでもそのまま動く。
 
+### 同梱プラグイン
+
+- **`cve_lookup`** — recon で判明した製品名+バージョンから既知CVE/エクスプロイト候補を検索
+  (searchsploit があれば優先、無ければ NVD 公開API)。recon→exploit の橋渡し
+- **`reverse_dns`** — IPの逆引き(プラグインの書き方サンプル)
+
 ## 安全装置(スコープ強制)
 
 配布時の事故(認可範囲外のホストへの誤爆)を防ぐため、プロファイルに **`scope`**
