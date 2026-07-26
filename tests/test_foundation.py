@@ -17,6 +17,7 @@ from sikun import scaffold
 from sikun.plugins import PluginContext, load_plugins
 from sikun.profile import PROJECT_ROOT, load_profile
 from sikun.rag import _split_into_chunks
+from sikun.scope import Scope, ScopeGuard, extract_hosts, guard_besteffort, guard_reliable
 from sikun.tools import _guess_tech, _parse_http_headers
 from sikun.tui import SikunApp
 
@@ -137,6 +138,73 @@ def test_tui_board_tracks_state():
             assert "gemini-3.5-flash" in app._status_text()
 
     asyncio.run(run())
+
+
+def test_scope_matching():
+    s = Scope(["10.20.0.0/24", "192.168.56.10", "shop.example.local"])
+    assert s.enabled
+    assert s.contains("10.20.0.5")
+    assert s.contains("http://10.20.0.5:8080/admin")
+    assert s.contains("192.168.56.10")
+    assert s.contains("api.shop.example.local")  # subdomain
+    assert not s.contains("10.20.1.5")           # neighbouring /24
+    assert not s.contains("8.8.8.8")
+    assert not s.contains("evil.example.com")
+
+
+def test_scope_disabled_allows_all():
+    s = Scope([])
+    assert not s.enabled
+    assert s.out_of_scope(["8.8.8.8", "anything"]) == []
+
+
+def test_extract_hosts_from_command():
+    hosts = extract_hosts("nmap -Pn 10.0.0.5 && curl http://10.0.0.9:8080/x")
+    assert "10.0.0.5" in hosts and "10.0.0.9" in hosts
+    # version-like dotted numbers that aren't valid IPs shouldn't crash it
+    assert isinstance(extract_hosts("pip install foo==1.2.3"), list)
+
+
+def test_guard_reliable_blocks_and_audits():
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as d:
+        audit = Path(d) / "audit.log"
+        guard = ScopeGuard(Scope(["10.0.0.0/24"]), audit, "10.0.0.5")
+        assert guard_reliable(guard, "nmap_scan", ["10.0.0.5"]) is None      # in scope
+        err = guard_reliable(guard, "nmap_scan", ["9.9.9.9"])                # out of scope
+        assert err and "9.9.9.9" in err
+        lines = [ _json.loads(x) for x in audit.read_text().splitlines() ]
+        assert lines[0]["decision"] == "allow" and lines[1]["decision"] == "blocked"
+
+
+def test_guard_besteffort_confirms_out_of_scope():
+    class _FakeApp:
+        def __init__(self, choice):
+            self._choice = choice
+            self.posted = []
+
+        async def post_event(self, ch, text, sev=None):
+            self.posted.append(text)
+
+        async def wait_for_choice(self, options):
+            return self._choice
+
+    with tempfile.TemporaryDirectory() as d:
+        guard = ScopeGuard(Scope(["10.0.0.0/24"]), Path(d) / "a.log", "10.0.0.5")
+        # in-scope: proceeds without prompting
+        assert asyncio.run(guard_besteffort(_FakeApp("block"), guard, "bash", ["10.0.0.9"])) is True
+        # out-of-scope + operator blocks
+        assert asyncio.run(guard_besteffort(_FakeApp("block"), guard, "bash", ["9.9.9.9"])) is False
+        # out-of-scope + operator overrides
+        assert asyncio.run(guard_besteffort(_FakeApp("allow"), guard, "bash", ["9.9.9.9"])) is True
+
+
+def test_example_plugin_declares_scope_targets():
+    plugins = {p.name: p for p in load_plugins([PROJECT_ROOT / "plugins"]).plugins}
+    rd = plugins["reverse_dns"]
+    assert rd.scope_targets is not None
+    assert rd.scope_targets({"ip": "1.2.3.4"}) == ["1.2.3.4"]
 
 
 def _main() -> int:

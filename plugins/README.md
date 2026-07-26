@@ -34,6 +34,18 @@ PLUGIN = ToolPlugin(
    - `ctx.target` / `ctx.ssh_host` / `ctx.workdir` も参照可
 3. **返り値は JSON にできる dict** — そのままモデルへツール結果として返る
 
+## 安全装置対応(推奨)
+
+`scope_targets` を宣言すると、そのツールが触れる対象がスコープ強制で**確実にチェック**され、
+認可範囲外なら実行前にブロックされる(宣言しない場合は引数からのベストエフォート推定+確認になる):
+
+```python
+PLUGIN = ToolPlugin(
+    name="whatweb", ...,
+    scope_targets=lambda args: [args["url"]],   # ← このツールが触れる対象を申告
+)
+```
+
 ## 補足
 
 - `parameters` は JSON Schema。**Claude / Gemini どちらのプロバイダでも同じ書き方**で動く

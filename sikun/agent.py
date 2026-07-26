@@ -16,8 +16,9 @@ import anthropic
 from sikun.events import render_tool_call, render_tool_result
 from sikun.plugins import PluginContext, ToolPlugin, load_plugins
 from sikun.profile import Profile
+from sikun.scope import Scope, ScopeGuard, extract_hosts, guard_besteffort, guard_reliable
 from sikun.tools import TOOLS, preview_for_ui, run_bash
-from sikun.tui import Interrupted
+from sikun.tui import LOG_DIR, Interrupted
 
 # Budget mode swaps the *defaults* only — an explicit SIKUN_MODEL/EFFORT/
 # FALLBACK_MODEL still wins. Note the fallback is deliberately NOT Opus here:
@@ -269,6 +270,22 @@ async def run_agent(
 
     plugin_ctx = PluginContext(target=target, ssh_host=ssh_host, workdir=workdir, run=_plugin_run)
 
+    # Scope guard: authorized-target enforcement + audit log (same as the
+    # Gemini backend). CLI target auto-allowed; empty scope disables it.
+    scope_entries = list(profile.scope)
+    if scope_entries:
+        scope_entries.append(target)
+    guard = ScopeGuard(Scope(scope_entries), LOG_DIR / "audit.log", target)
+    if guard.enabled:
+        await app.post_event(
+            "system", f"[dim]スコープ強制: 有効(認可範囲 {', '.join(guard.scope.raw)})[/dim]"
+        )
+    else:
+        await app.post_event(
+            "system",
+            "[bold yellow]⚠ スコープ未設定 — 範囲チェック無効。配布時は profile に scope を設定してください[/bold yellow]",
+        )
+
     system = _build_system_prompt(target, persona, kb_dir)
 
     messages: list[dict] = []
@@ -418,6 +435,16 @@ async def run_agent(
                             }
                         )
                         continue
+                    if not await guard_besteffort(app, guard, "bash", extract_hosts(command)):
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": "認可スコープ外の対象のため operator が実行を中止しました",
+                                "is_error": True,
+                            }
+                        )
+                        continue
                     await app.post_event("system", render_tool_call(f"Bash({command})"))
                     output = await run_bash(command, workdir, ssh_host=ssh_host)
                     await app.post_event("system", render_tool_result(preview_for_ui(output)))
@@ -453,6 +480,26 @@ async def run_agent(
                 elif block.name in plugin_map:
                     plugin = plugin_map[block.name]
                     args = dict(block.input or {})
+                    if plugin.scope_targets is not None:
+                        scope_err = guard_reliable(guard, block.name, list(plugin.scope_targets(args) or []))
+                        if scope_err:
+                            await app.post_event("system", f"[bold red]{scope_err}[/bold red]")
+                            tool_results.append(
+                                {"type": "tool_result", "tool_use_id": block.id, "content": scope_err, "is_error": True}
+                            )
+                            continue
+                    elif not await guard_besteffort(
+                        app, guard, block.name, extract_hosts(" ".join(str(v) for v in args.values()))
+                    ):
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": "認可スコープ外の対象のため operator が実行を中止しました",
+                                "is_error": True,
+                            }
+                        )
+                        continue
                     await app.post_event(
                         "system", render_tool_call(f"{block.name}({_fmt_plugin_args(args)})")
                     )

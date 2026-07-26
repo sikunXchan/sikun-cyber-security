@@ -40,4 +40,6 @@ PLUGIN = ToolPlugin(
     },
     run=_run,
     summary=lambda r: (r.get("result") or r.get("error") or "")[:200] if isinstance(r, dict) else str(r),
+    # このツールが触れる対象を申告 → scope強制が確実に効く(範囲外なら実行前にブロック)。
+    scope_targets=lambda args: [str(args.get("ip", ""))],
 )

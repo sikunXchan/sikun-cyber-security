@@ -64,6 +64,12 @@ class ToolPlugin:
     parameters: dict[str, Any]
     run: Callable[[dict, PluginContext], Awaitable[Any]]
     summary: Callable[[Any], str] | None = None
+    # Optional: declare which hosts/URLs this call will touch, given its args.
+    # If provided, the scope guard checks these RELIABLY and hard-blocks an
+    # out-of-scope call before run() executes. If omitted, the guard falls back
+    # to best-effort extraction from the arg values (confirm, not hard block) —
+    # so declaring this is the way to get reliable enforcement for your tool.
+    scope_targets: Callable[[dict], list[str]] | None = None
 
     def summarize(self, result: Any) -> str:
         if self.summary is not None:

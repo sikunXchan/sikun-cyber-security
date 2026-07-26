@@ -42,6 +42,11 @@ knowledge_base = "knowledge_base"
 # プラグイン(自作ツール)を読み込むディレクトリ一覧。
 # ここに置いた *.py が自動でツールとして登録されます。
 plugins = ["plugins"]
+
+# 認可された対象スコープ(IP / CIDR / ホスト名)。空なら範囲チェックは無効。
+# 配布時は必ず設定すること。範囲外への操作を実行前にブロックして事故を防ぐ。
+# scope = ["10.20.0.0/24", "192.168.56.0/24"]
+scope = []
 """
 
 _PLUGIN_TEMPLATE = '''"""{name} 用のサンプルプラグイン。
@@ -79,6 +84,8 @@ PLUGIN = ToolPlugin(
     }},
     run=_run,
     summary=lambda r: f"{{r.get('host')}}: {{'到達可' if r.get('reachable') else '到達不可'}}",
+    # このツールが触れる対象を申告 → scope強制が確実に効く(範囲外は実行前にブロック)。
+    scope_targets=lambda args: [str(args.get("host") or "")],
 )
 '''
 

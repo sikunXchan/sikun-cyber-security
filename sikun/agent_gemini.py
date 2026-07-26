@@ -33,8 +33,9 @@ from sikun.agent import GENERAL_SYSTEM_PROMPT_TEMPLATE, SYSTEM_PROMPT_TEMPLATE
 from sikun.events import render_tool_call, render_tool_result
 from sikun.plugins import PluginContext, ToolPlugin, load_plugins
 from sikun.profile import Profile
+from sikun.scope import Scope, ScopeGuard, extract_hosts, guard_besteffort, guard_reliable
 from sikun.tools import PersistentShell, preview_for_ui, run_dir_enum, run_http_probe, run_nmap_scan
-from sikun.tui import Interrupted
+from sikun.tui import LOG_DIR, Interrupted
 
 FULL_MODEL = os.environ.get("SIKUN_GEMINI_MODEL", "gemini-3.5-flash")
 # Released 2026-07-21 — ~5x cheaper input / ~3.6x cheaper output than full
@@ -448,6 +449,22 @@ async def run_agent(
             "system", f"[dim]プラグイン読み込み: {', '.join(sorted(plugin_map))}[/dim]"
         )
 
+    # Scope guard: authorized-target enforcement + audit log. The CLI target is
+    # auto-allowed when scope is set; empty scope means enforcement is off.
+    scope_entries = list(profile.scope)
+    if scope_entries:
+        scope_entries.append(target)
+    guard = ScopeGuard(Scope(scope_entries), LOG_DIR / "audit.log", target)
+    if guard.enabled:
+        await app.post_event(
+            "system", f"[dim]スコープ強制: 有効(認可範囲 {', '.join(guard.scope.raw)})[/dim]"
+        )
+    else:
+        await app.post_event(
+            "system",
+            "[bold yellow]⚠ スコープ未設定 — 範囲チェック無効。配布時は profile に scope を設定してください[/bold yellow]",
+        )
+
     shell = PersistentShell(ssh_host=ssh_host, cwd=workdir)
     await shell.start()
     await app.post_event("system", f"[dim]永続シェル起動(ssh_host={ssh_host or 'ローカル'})[/dim]")
@@ -485,6 +502,7 @@ async def run_agent(
             kb_dir=kb_dir,
             full_model=full_model,
             lite_model=lite_model,
+            guard=guard,
         )
     finally:
         await shell.stop()
@@ -509,8 +527,11 @@ async def _run_loop(
     kb_dir: Path | None = None,
     full_model: str = FULL_MODEL,
     lite_model: str = LITE_MODEL,
+    guard: ScopeGuard | None = None,
 ) -> None:
     plugin_map = plugin_map or {}
+    if guard is None:
+        guard = ScopeGuard(Scope([]), LOG_DIR / "audit.log", target)
     # Plugins execute shell commands through the same persistent session the
     # rest of the agent uses, so cd/env/background PIDs they set stick too.
     plugin_ctx = PluginContext(
@@ -664,6 +685,14 @@ async def _run_loop(
                             )
                         )
                         continue
+                    if not await guard_besteffort(app, guard, "bash", extract_hosts(command)):
+                        function_response_parts.append(
+                            types.Part.from_function_response(
+                                name=fc.name,
+                                response={"error": "認可スコープ外の対象のため operator が実行を中止しました"},
+                            )
+                        )
+                        continue
                     await app.post_event("system", render_tool_call(f"Bash({command})"))
                     output = await shell.run(command)
                     await app.post_event("system", render_tool_result(preview_for_ui(output)))
@@ -687,6 +716,13 @@ async def _run_loop(
                             types.Part.from_function_response(
                                 name=fc.name, response={"error": "target が空です"}
                             )
+                        )
+                        continue
+                    scope_err = guard_reliable(guard, "nmap_scan", [nmap_target])
+                    if scope_err:
+                        await app.post_event("system", f"[bold red]{scope_err}[/bold red]")
+                        function_response_parts.append(
+                            types.Part.from_function_response(name=fc.name, response={"error": scope_err})
                         )
                         continue
                     await app.post_event(
@@ -722,6 +758,13 @@ async def _run_loop(
                             )
                         )
                         continue
+                    scope_err = guard_reliable(guard, "http_probe", [probe_url])
+                    if scope_err:
+                        await app.post_event("system", f"[bold red]{scope_err}[/bold red]")
+                        function_response_parts.append(
+                            types.Part.from_function_response(name=fc.name, response={"error": scope_err})
+                        )
+                        continue
                     await app.post_event("system", render_tool_call(f"http_probe(url={probe_url})"))
                     probe_result = await run_http_probe(probe_url, ssh_host=ssh_host)
                     summary = (
@@ -740,6 +783,13 @@ async def _run_loop(
                             types.Part.from_function_response(
                                 name=fc.name, response={"error": "url が空です"}
                             )
+                        )
+                        continue
+                    scope_err = guard_reliable(guard, "dir_enum", [enum_url])
+                    if scope_err:
+                        await app.post_event("system", f"[bold red]{scope_err}[/bold red]")
+                        function_response_parts.append(
+                            types.Part.from_function_response(name=fc.name, response={"error": scope_err})
                         )
                         continue
                     await app.post_event("system", render_tool_call(f"dir_enum(url={enum_url})"))
@@ -778,6 +828,24 @@ async def _run_loop(
                 elif fc.name in plugin_map:
                     plugin = plugin_map[fc.name]
                     args = dict(fc.args or {})
+                    if plugin.scope_targets is not None:
+                        scope_err = guard_reliable(guard, fc.name, list(plugin.scope_targets(args) or []))
+                        if scope_err:
+                            await app.post_event("system", f"[bold red]{scope_err}[/bold red]")
+                            function_response_parts.append(
+                                types.Part.from_function_response(name=fc.name, response={"error": scope_err})
+                            )
+                            continue
+                    elif not await guard_besteffort(
+                        app, guard, fc.name, extract_hosts(" ".join(str(v) for v in args.values()))
+                    ):
+                        function_response_parts.append(
+                            types.Part.from_function_response(
+                                name=fc.name,
+                                response={"error": "認可スコープ外の対象のため operator が実行を中止しました"},
+                            )
+                        )
+                        continue
                     await app.post_event(
                         "system", render_tool_call(f"{fc.name}({_fmt_plugin_args(args)})")
                     )

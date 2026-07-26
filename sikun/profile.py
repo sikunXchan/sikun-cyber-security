@@ -32,6 +32,10 @@ class Profile:
     persona: str = ""
     knowledge_base: Path = DEFAULT_KB
     plugin_dirs: list[Path] = field(default_factory=lambda: [DEFAULT_PLUGINS])
+    # Authorized target scope (IPs / CIDRs / hostnames). Empty == no enforcement.
+    # Set this in the distributed build so an accidental out-of-scope command is
+    # blocked. See sikun.scope.
+    scope: list[str] = field(default_factory=list)
 
 
 def _resolve(path_like: str) -> Path:
@@ -81,6 +85,9 @@ def _from_file(path: Path) -> Profile:
     kb = data.get("knowledge_base")
     plugin_dirs = data.get("plugins")
     model = data.get("model")
+    scope = data.get("scope") or []
+    if not isinstance(scope, list):
+        raise ValueError(f"{path.name}: scope はリスト(例: [\"10.0.0.0/24\"])にしてください")
 
     return Profile(
         name=str(data.get("name", path.stem)),
@@ -89,4 +96,5 @@ def _from_file(path: Path) -> Profile:
         persona=str(data.get("persona", "")),
         knowledge_base=_resolve(kb) if kb else DEFAULT_KB,
         plugin_dirs=[_resolve(d) for d in plugin_dirs] if plugin_dirs else [DEFAULT_PLUGINS],
+        scope=[str(x) for x in scope],
     )
