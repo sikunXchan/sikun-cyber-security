@@ -430,6 +430,21 @@ def test_privesc_enum_run_and_scope():
     assert any("bash" in n for n in out["notable"])  # /bin/bash SUID flagged
 
 
+def test_system_prompt_has_persistence_and_efficiency_guidance():
+    from sikun.agent import SYSTEM_PROMPT_TEMPLATE
+
+    # field-test-driven guidance: adapt-then-honestly-stop + no huge-bundle fetches
+    assert "成功を偽らず" in SYSTEM_PROMPT_TEMPLATE
+    assert "バンドルを丸ごと取得しない" in SYSTEM_PROMPT_TEMPLATE
+
+
+def test_dir_enum_wordlist_expanded_for_discovery():
+    from sikun.tools import _DEFAULT_DIR_WORDLIST
+
+    for path in ("main.js.map", "metrics", "api-docs", ".git/HEAD"):
+        assert path in _DEFAULT_DIR_WORDLIST, path
+
+
 def _main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

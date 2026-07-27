@@ -386,12 +386,16 @@ async def run_http_probe(url: str, ssh_host: str | None = None) -> dict:
 # SecLists or dirb's wordlists being installed on whatever host this runs on.
 _DEFAULT_DIR_WORDLIST = [
     "", "admin", "administrator", "login", "wp-admin", "wp-login.php", "api", "api/v1",
-    "backup", "backups", ".git/config", ".env", ".env.example", "config", "config.php",
+    "backup", "backups", ".git/config", ".git/HEAD", ".env", ".env.example", "config", "config.php",
     "robots.txt", "sitemap.xml", ".well-known/security.txt", "server-status", "phpinfo.php",
     "uploads", "images", "static", "assets", "js", "css", "test", "dev", "staging",
     "swagger", "swagger-ui", "graphql", "actuator", "actuator/health", "console",
     "cgi-bin", ".htaccess", "web.config", "README.md", "install", "setup", "debug",
     "phpmyadmin", "adminer", "manager/html", "status", "health",
+    # 侵入口が見つからない時に効く一般的な発見系(JSからのルート抽出/メタ情報/VCS露出)
+    "metrics", "api-docs", "swagger.json", "openapi.json", "api/docs", "rest",
+    "main.js", "app.js", "main.js.map", "app.js.map", "bundle.js", "ftp",
+    "backup.zip", "backup.tar.gz", "db.sqlite", "package.json", "server.js", ".DS_Store",
 ]
 
 

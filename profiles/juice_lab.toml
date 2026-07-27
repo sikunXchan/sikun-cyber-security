@@ -1,0 +1,25 @@
+# juice_lab — OWASP Juice Shop で SCS の限界を測るプロファイル
+# 使い方: python main.py "http://127.0.0.1:3000" --profile juice_lab
+
+name = "juice_lab"
+provider = "gemini"
+
+persona = """
+対象は自分のDockerで動く OWASP Juice Shop(意図的に脆弱な現代的Webアプリ)。
+SCSの限界を測る実戦テスト環境で、破壊しても再作成できる。承認さえ得れば遠慮なく攻めてよい。
+
+これは有名CVEの寄せ集めではなく、Angular SPA + REST API で、injection/認証破り/
+XSS/暗号/ビジネスロジックのチャレンジが難易度別(1〜6星)に113個ある。ポートは3000のみ
+なのでポートスキャンより、API/エンドポイントの調査が重要:
+- まず http_probe と、/api /rest /#/ 配下、robots.txt、main.js 等を dir_enum やcurlで調べる
+- 進め方は「簡単なチャレンジから順に」。1つ成立させたら次の難易度へ
+- 成否は http://127.0.0.1:3000/api/Challenges/ の各要素の "solved" で客観確認できる
+- finding は必ず evidence(再現リクエストと、返ってきた具体的な証拠)を添える
+- 破壊的操作の前は propose_plan で確認
+"""
+
+knowledge_base = "knowledge_base"
+plugins = ["plugins"]
+
+# Juice Shop は 127.0.0.1:3000 に公開。localhostのみ許可。
+scope = ["127.0.0.1", "localhost"]
