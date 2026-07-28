@@ -48,7 +48,7 @@ PLUGIN = ToolPlugin(
 
 ## 補足
 
-- `parameters` は JSON Schema。**Claude / Gemini どちらのプロバイダでも同じ書き方**で動く
+- `parameters` は標準的な JSON Schema。コアを改造せず `.py` を置くだけで登録される
 - `summary=lambda r: ...` を付けると、TUI に出る1行プレビューを整えられる
 - ファイル名/ツール名が `_` で始まるものは読み込み対象外(ヘルパー用)
 - 予約名(`bash`, `report`, `nmap_scan`, `http_probe`, `dir_enum`, `propose_plan`)は使えません

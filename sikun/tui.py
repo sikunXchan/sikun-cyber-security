@@ -339,7 +339,7 @@ class SikunApp(App):
             self.session_state["model"] = arg
             note = "簡単な作業向けの軽量モデル" if arg == "lite" else "通常モデル"
             await self.post_event(
-                "system", f"[bold green]モデル切替: {arg}({note}、次のターンから反映。Geminiバックエンドのみ)[/bold green]"
+                "system", f"[bold green]モデル切替: {arg}({note}、次のターンから反映)[/bold green]"
             )
         else:
             await self.post_event("system", f"[bold red]不明なコマンド: /{cmd}[/bold red]")

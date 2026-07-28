@@ -2,7 +2,6 @@
 # 使い方: python main.py "http://127.0.0.1:3000" --profile juice_lab
 
 name = "juice_lab"
-provider = "gemini"
 
 persona = """
 対象は自分のDockerで動く OWASP Juice Shop(意図的に脆弱な現代的Webアプリ)。

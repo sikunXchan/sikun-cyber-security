@@ -1,7 +1,7 @@
 # Sikun Cyber Security (SCS)
 
 **認可された対象に対する攻撃的セキュリティ診断(ペネトレーションテスト)を自律的に行うAIエージェント。**
-Gemini API をオーケストレーションの中核に据え(Claude にも切替可)、攻撃特化ツール・プラグイン基盤・
+Gemini API をオーケストレーションの中核に据え、攻撃特化ツール・プラグイン基盤・
 リッチターミナルUIを組み合わせて構築する。安価なLLM + 安全なスキャフォールディングで、
 偵察から実証・報告・検知ルール化までを一気通貫で自動化する。
 
@@ -16,7 +16,7 @@ Gemini API をオーケストレーションの中核に据え(Claude にも切�
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # 自分の GEMINI_API_KEY(必要なら ANTHROPIC_API_KEY)を設定
+cp .env.example .env   # 自分の GEMINI_API_KEY を設定
 ```
 
 APIキーは各自で用意する(`.env` は Git にコミットされない)。
@@ -26,7 +26,6 @@ APIキーは各自で用意する(`.env` は Git にコミットされない)。
 ```bash
 python main.py <対象ホスト>                    # 既定(default)プロファイルで起動
 python main.py <対象ホスト> --profile web       # 自分のプロファイルで起動
-python main.py <対象ホスト> --provider claude   # プロバイダを明示指定
 python main.py <対象ホスト> --ssh user@pi       # 対象LAN上のホスト経由でbash実行
 python main.py --logs                          # 過去セッションのログ一覧
 ```
@@ -45,12 +44,11 @@ python main.py --init myagent
 
 ```toml
 name = "myagent"
-provider = "gemini"           # または "claude"
 persona = "Web脆弱性診断が得意な慎重派。破壊的操作の前は必ず確認する。"
 plugins = ["plugins"]
 ```
 
-provider / モデル / 性格(persona)/ プラグインの場所を、
+モデル / 性格(persona)/ プラグインの場所を、
 **コードを書かずに** 切り替えられる。
 
 ### 3. 自作ツール(プラグイン)を追加
@@ -75,7 +73,7 @@ PLUGIN = ToolPlugin(
 )
 ```
 
-同じプラグインが Claude / Gemini どちらのプロバイダでもそのまま動く。
+プラグインはコアを一切改造せず `.py` を置くだけで登録される(バックエンド非依存の設計)。
 
 ### 同梱プラグイン
 
@@ -112,10 +110,10 @@ scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
 
 ## 構成
 
-- `main.py` — CLIエントリ(`--profile` / `--init` / `--provider` / `--ssh` / `--logs`)
-- `sikun/agent_gemini.py` — Gemini バックエンド・コア(永続シェル・thinking配分・構造化ツール・永続メモリ)
-- `sikun/agent.py` — Claude バックエンド(tool-use ループ)
-- `sikun/tools.py` — bash / report / propose_plan + 構造化ツール(nmap_scan / http_probe / dir_enum)
+- `main.py` — CLIエントリ(`--profile` / `--init` / `--ssh` / `--logs`)
+- `sikun/agent_gemini.py` — エージェント・コア(Gemini tool-use ループ・永続シェル・thinking配分・構造化ツール・永続メモリ)
+- `sikun/prompts.py` — システムプロンプト・テンプレート(security / general モード)
+- `sikun/tools.py` — 永続シェル + 構造化ツール実装(nmap_scan / http_probe / dir_enum)
 - `sikun/plugins.py` — **プラグイン基盤**(自作ツールの自動読み込み)
 - `sikun/profile.py` — **エージェント・プロファイル**(TOML設定)
 - `sikun/scaffold.py` — `--init` の雛形生成

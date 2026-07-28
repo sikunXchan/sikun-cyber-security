@@ -3,9 +3,9 @@
 ``--profile mine`` loads ``profiles/mine.toml`` (or a direct path to any
 ``.toml``). Every key is optional and falls back to the defaults below, so a
 bare ``--profile`` and the shipped ``default`` profile both Just Work. A
-profile chooses the provider/model, injects a persona into the system prompt,
-and lists directories to auto-load tool plugins from. This is what lets each
-student build their own
+profile chooses the model, injects a persona into the system prompt, and lists
+directories to auto-load tool plugins from. This is what lets each student
+build their own
 agent without editing any core code — they write a profile and drop in
 plugins.
 """
@@ -20,13 +20,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROFILES_DIR = PROJECT_ROOT / "profiles"
 DEFAULT_PLUGINS = PROJECT_ROOT / "plugins"
 
-VALID_PROVIDERS = {"claude", "gemini"}
-
 
 @dataclass
 class Profile:
     name: str = "default"
-    provider: str = "gemini"
     model: str | None = None
     persona: str = ""
     plugin_dirs: list[Path] = field(default_factory=lambda: [DEFAULT_PLUGINS])
@@ -74,12 +71,6 @@ def load_profile(name_or_path: str | None) -> Profile:
 def _from_file(path: Path) -> Profile:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
 
-    provider = str(data.get("provider", "gemini")).lower()
-    if provider not in VALID_PROVIDERS:
-        raise ValueError(
-            f"{path.name}: provider は {sorted(VALID_PROVIDERS)} のいずれかにしてください(指定: {provider})"
-        )
-
     plugin_dirs = data.get("plugins")
     model = data.get("model")
     scope = data.get("scope") or []
@@ -88,7 +79,6 @@ def _from_file(path: Path) -> Profile:
 
     return Profile(
         name=str(data.get("name", path.stem)),
-        provider=provider,
         model=str(model) if model else None,
         persona=str(data.get("persona", "")),
         plugin_dirs=[_resolve(d) for d in plugin_dirs] if plugin_dirs else [DEFAULT_PLUGINS],

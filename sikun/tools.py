@@ -1,11 +1,11 @@
-"""Tool definitions for the agent loop.
+"""Shell execution and structured recon tools for the agent loop.
 
-- `bash`  : Anthropic-defined, schema-less tool. Executes real shell commands
-            on this host (WSL2). ONLY run against the authorized exercise
-            target — never against arbitrary hosts.
-- `report`: custom tool the model calls to narrate progress into the right
-            TUI panel (recon / exploit / finding / system). Keeps UI routing
-            explicit instead of guessing from command text.
+The agent's tool *schemas* live with the agent backend (sikun.agent_gemini);
+this module holds the implementations they call: a long-lived PersistentShell
+for bash, and the structured recon runners (nmap_scan / http_probe / dir_enum)
+that parse tool output into typed results instead of handing the model raw
+dumps. All of it runs against the authorized target only — never arbitrary
+hosts.
 """
 
 from __future__ import annotations
@@ -15,129 +15,6 @@ import re
 import shlex
 import uuid
 from pathlib import Path
-
-BASH_TOOL = {"type": "bash_20250124", "name": "bash"}
-
-REPORT_TOOL = {
-    "name": "report",
-    "description": (
-        "UIの該当パネルに進捗・発見事項を表示する。実際の操作はbashツールで行い、"
-        "このツールは状況説明や成果物の報告専用。攻撃ステップを踏むたびに、"
-        "recon(偵察結果)/exploit(攻撃の試行・結果)/finding(確定した脆弱性・成果)"
-        "のいずれかで呼び出すこと。"
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "channel": {
-                "type": "string",
-                "enum": ["recon", "exploit", "finding", "system"],
-                "description": "表示先パネル",
-            },
-            "text": {"type": "string", "description": "表示するメッセージ"},
-            "severity": {
-                "type": "string",
-                "enum": ["critical", "high", "medium", "low", "info"],
-                "description": "finding の場合の重要度(任意)",
-            },
-            "evidence": {
-                "type": "string",
-                "description": (
-                    "finding の場合は必須。脆弱性を裏付ける再現コマンドとその出力の要点"
-                    "(例: 実行した payload と、返ってきた具体的な証拠)。これを示せない"
-                    "=未確認なら、finding ではなく recon チャンネルで『要確認』として報告する"
-                ),
-            },
-        },
-        "required": ["channel", "text"],
-    },
-}
-
-PLAN_TOOL = {
-    "name": "propose_plan",
-    "description": (
-        "実行系のアクション(攻撃・攻撃的な検証など、対象の状態を変えたり攻撃を成立させたり"
-        "する操作)を取る前に、具体的な計画を提示してユーザーの承認を待つ。単なる説明・"
-        "脆弱性の報告・診断(読み取り専用で実害のない調査)だけならこのツールは不要で、"
-        "直接 bash/report で調査・報告に進んでよい。"
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "target": {"type": "string", "description": "対象"},
-            "steps": {"type": "string", "description": "実施予定の手順(箇条書き推奨)"},
-            "risk": {"type": "string", "description": "想定されるリスク・影響範囲"},
-        },
-        "required": ["steps"],
-    },
-}
-
-NMAP_SCAN_TOOL = {
-    "name": "nmap_scan",
-    "description": (
-        "対象ホストのポートスキャン・サービス検出を行い、構造化された結果(開いているポート・"
-        "サービス名・バージョン)を返す。bashでnmapコマンドを自分で組み立てて生の出力をパースする"
-        "より信頼性が高いので、ポートスキャンをしたい場合はこちらを優先して使うこと。"
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "target": {"type": "string", "description": "スキャン対象のIP/ホスト名"},
-            "ports": {
-                "type": "string",
-                "description": "ポート範囲(例: '1-1000', '22,80,443')。省略時は上位1000番",
-            },
-            "service_detection": {
-                "type": "boolean",
-                "description": "サービスバージョン検出(-sV)を行うか。デフォルトtrue",
-            },
-        },
-        "required": ["target"],
-    },
-}
-
-HTTP_PROBE_TOOL = {
-    "name": "http_probe",
-    "description": (
-        "対象URL/ホストにHTTPリクエストを送り、ステータスコード・レスポンスヘッダ・"
-        "ページタイトル・技術スタックの推測を構造化して返す。bashでcurlを叩いて生の"
-        "ヘッダやHTMLを自分で読むより信頼性が高いので、Webサービスの初期調査(何が"
-        "動いているかの把握)にはこちらを優先して使うこと。"
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "url": {
-                "type": "string",
-                "description": "対象URL(例: 'http://192.168.1.1:8080/')。スキームを省略した場合はhttp://を補う",
-            },
-        },
-        "required": ["url"],
-    },
-}
-
-DIR_ENUM_TOOL = {
-    "name": "dir_enum",
-    "description": (
-        "対象URL配下のディレクトリ・ファイルを探索し、見つかったパスとステータスコードを"
-        "構造化して返す(gobusterが対象にあれば使用、無ければ組み込みの簡易ワードリストで"
-        "curlスイープにフォールバック)。隠しパネル・バックアップファイル・.git/.env等の"
-        "露出確認に使う。"
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "description": "探索対象のベースURL"},
-            "wordlist": {
-                "type": "string",
-                "description": "カンマ区切りの探索パス一覧(省略時は組み込みの一般的なパス群を使用)",
-            },
-        },
-        "required": ["url"],
-    },
-}
-
-TOOLS = [BASH_TOOL, REPORT_TOOL, NMAP_SCAN_TOOL, HTTP_PROBE_TOOL, DIR_ENUM_TOOL, PLAN_TOOL]
 
 MAX_OUTPUT_CHARS = 8000
 UI_PREVIEW_CHARS = 700

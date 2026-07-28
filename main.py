@@ -11,21 +11,11 @@ import sys
 
 from dotenv import load_dotenv
 
+from sikun.agent_gemini import run_agent
 from sikun.banner import print_banner
 from sikun.profile import load_profile
 from sikun.scaffold import init_agent
 from sikun.tui import LOG_DIR, SikunApp
-
-PROVIDERS = {"claude", "gemini"}
-
-
-def _load_run_agent(provider: str):
-    """Import lazily so picking one provider doesn't require the other's SDK/key."""
-    if provider == "gemini":
-        from sikun.agent_gemini import run_agent
-    else:
-        from sikun.agent import run_agent
-    return run_agent
 
 
 def _handle_logs_flag(value: str) -> None:
@@ -61,14 +51,8 @@ def _handle_logs_flag(value: str) -> None:
 def main() -> None:
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Sikun Cyber Security — attack-exercise agent")
+    parser = argparse.ArgumentParser(description="Sikun Cyber Security — authorized pentest agent")
     parser.add_argument("target", nargs="?", help="認可された対象 (IP/ホスト名/URL)")
-    parser.add_argument(
-        "--provider",
-        choices=sorted(PROVIDERS),
-        default=None,
-        help="使用するモデルプロバイダ (claude または gemini)。省略時はプロファイルの設定に従う",
-    )
     parser.add_argument(
         "--profile",
         default=os.environ.get("SIKUN_PROFILE"),
@@ -112,10 +96,6 @@ def main() -> None:
         print(f"プロファイル読み込みエラー: {exc}")
         sys.exit(1)
 
-    # Provider precedence: explicit --provider > profile > default.
-    provider = args.provider or profile.provider
-    run_agent = _load_run_agent(provider)
-
     target = args.target
     if not target:
         print_banner()
@@ -151,7 +131,7 @@ def _handle_init(name: str) -> None:
         print(f"スキップ(既に存在): {path}")
     if created:
         print(f"\n次のステップ:")
-        print(f"  1. profiles/{name}.toml を編集(provider / persona など)")
+        print(f"  1. profiles/{name}.toml を編集(persona / model など)")
         print(f"  2. plugins/{name}_ping.py を編集して自作ツールを追加")
         print(f"  3. python main.py <対象> --profile {name} で起動")
 

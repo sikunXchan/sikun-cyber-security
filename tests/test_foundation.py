@@ -18,7 +18,6 @@ from sikun import scaffold
 from sikun.plugins import PluginContext, load_plugins
 from sikun.profile import PROJECT_ROOT, load_profile
 from sikun.scope import Scope, ScopeGuard, extract_hosts, guard_besteffort, guard_reliable
-from sikun.tools import TOOLS as CLAUDE_BUILTIN_TOOLS
 from sikun.tools import _guess_tech, _parse_http_headers
 from sikun.tui import SikunApp
 
@@ -26,7 +25,6 @@ from sikun.tui import SikunApp
 def test_default_profile_loads():
     p = load_profile(None)
     assert p.name == "default"
-    assert p.provider == "gemini"
     assert p.plugin_dirs and p.plugin_dirs[0].name == "plugins"
 
 
@@ -359,10 +357,7 @@ def test_detection_rule_saves_file():
 
 
 def test_report_tool_has_evidence_field():
-    # finding verification loop: report must accept an `evidence` arg on both backends
-    from sikun.tools import REPORT_TOOL
-
-    assert "evidence" in REPORT_TOOL["input_schema"]["properties"]
+    # finding verification loop: the report tool must accept an `evidence` arg
     import sikun.agent_gemini as ag
 
     params = ag.REPORT_DECLARATION.parameters
@@ -421,7 +416,7 @@ def test_privesc_enum_run_and_scope():
 
 
 def test_system_prompt_has_persistence_and_efficiency_guidance():
-    from sikun.agent import SYSTEM_PROMPT_TEMPLATE
+    from sikun.prompts import SYSTEM_PROMPT_TEMPLATE
 
     # field-test-driven guidance: adapt-then-honestly-stop + no huge-bundle fetches
     assert "成功を偽らず" in SYSTEM_PROMPT_TEMPLATE
@@ -435,19 +430,16 @@ def test_dir_enum_wordlist_expanded_for_discovery():
         assert path in _DEFAULT_DIR_WORDLIST, path
 
 
-def test_claude_and_gemini_backends_register_the_same_builtin_tools():
-    """SYSTEM_PROMPT_TEMPLATE (shared by both backends) instructs the model to
-    prefer nmap_scan/http_probe/dir_enum over raw bash, and tells cve_lookup
-    users to source product/version from nmap_scan/http_probe. That's a lie for
-    whichever backend doesn't actually register those tools. This exact gap
-    shipped once (agent.py advertised them in the prompt but never added them to
-    its `tools` list) — this test pins both backends' built-in tool names so it
-    can't silently regress."""
+def test_builtin_tools_match_prompt_advertised_tools():
+    """SYSTEM_PROMPT_TEMPLATE tells the model to prefer nmap_scan/http_probe/
+    dir_enum over raw bash and to feed cve_lookup from them. That's a lie if the
+    backend doesn't actually register those tools — a gap that shipped once. Pin
+    the built-in tool names so the prompt and the registered tools can't drift."""
     from sikun import agent_gemini
 
-    claude_names = {t["name"] for t in CLAUDE_BUILTIN_TOOLS}
-    gemini_names = {d.name for d in agent_gemini.TOOLS.function_declarations}
-    assert claude_names == gemini_names, (claude_names, gemini_names)
+    names = {d.name for d in agent_gemini.TOOLS.function_declarations}
+    for advertised in ("bash", "report", "nmap_scan", "http_probe", "dir_enum", "propose_plan"):
+        assert advertised in names, (advertised, names)
 
 
 def test_model_tier_defaults_to_lite():

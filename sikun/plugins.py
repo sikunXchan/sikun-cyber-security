@@ -7,13 +7,13 @@ module-level ``PLUGIN`` (one :class:`ToolPlugin`) or ``PLUGINS`` (a list of
 them). At startup the active profile's plugin dirs are scanned, every such
 file imported, and each ToolPlugin handed to the model as a callable tool —
 schema advertising, dispatch, and result routing are all done by the existing
-agent loop. No edits to ``agent.py`` / ``agent_gemini.py`` / ``tools.py`` are
-required to add a tool; that is the whole point.
+agent loop. No edits to ``agent_gemini.py`` / ``tools.py`` are required to add
+a tool; that is the whole point.
 
 A plugin's ``run(args, ctx)`` gets the model-supplied arguments plus a
 :class:`PluginContext`, whose ``run`` executes a shell command against the
-same local-or-SSH target the rest of the agent uses (the persistent Gemini
-shell, or Claude's per-call subprocess — the plugin doesn't care which).
+same local-or-SSH target the rest of the agent uses (the persistent shell —
+the plugin doesn't care how it's wired).
 """
 
 from __future__ import annotations
@@ -33,10 +33,10 @@ RESERVED_NAMES = {"bash", "report", "propose_plan", "nmap_scan", "http_probe", "
 class PluginContext:
     """Handed to a plugin's ``run()`` so it can actually do work.
 
-    ``run`` is bound by the backend to its shell (the persistent Gemini shell
-    or Claude's per-call subprocess), so a plugin just ``await ctx.run("...")``
-    and stays provider-agnostic. ``target``/``ssh_host``/``workdir`` are the
-    same values the rest of the agent operates against.
+    ``run`` is bound by the loop to its persistent shell, so a plugin just
+    ``await ctx.run("...")`` without caring how execution is wired.
+    ``target``/``ssh_host``/``workdir`` are the same values the rest of the
+    agent operates against.
     """
 
     target: str
@@ -50,9 +50,9 @@ class ToolPlugin:
     """One tool a plugin file exposes to the model.
 
     ``parameters`` is a JSON-Schema object (``{"type": "object", "properties":
-    {...}, "required": [...]}``) — the same shape works for both the Anthropic
-    (``input_schema``) and Gemini (``FunctionDeclaration.parameters``) tool
-    APIs, so a plugin is written once and runs on either provider.
+    {...}, "required": [...]}``) — the shape Gemini's
+    ``FunctionDeclaration.parameters`` expects, and a standard schema a plugin
+    author writes once.
 
     ``run`` must return something JSON-serializable (a dict is ideal — it goes
     straight back to the model as the tool result). ``summary`` is optional and
