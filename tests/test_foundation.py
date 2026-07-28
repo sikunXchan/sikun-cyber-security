@@ -1,4 +1,4 @@
-"""v1.0 foundation tests — profiles, plugins, scaffold, RAG chunking, parsers, TUI board.
+"""v1.0 foundation tests — profiles, plugins, scaffold, parsers, TUI board.
 
 Runs two ways:
   * `python tests/test_foundation.py`  (no extra deps — uses the built-in runner below)
@@ -17,7 +17,6 @@ from pathlib import Path
 from sikun import scaffold
 from sikun.plugins import PluginContext, load_plugins
 from sikun.profile import PROJECT_ROOT, load_profile
-from sikun.rag import _split_into_chunks
 from sikun.scope import Scope, ScopeGuard, extract_hosts, guard_besteffort, guard_reliable
 from sikun.tools import TOOLS as CLAUDE_BUILTIN_TOOLS
 from sikun.tools import _guess_tech, _parse_http_headers
@@ -90,16 +89,6 @@ def test_scaffold_creates_and_skips():
     finally:
         prof.unlink(missing_ok=True)
         plug.unlink(missing_ok=True)
-
-
-def test_rag_chunking_splits_on_headings():
-    with tempfile.TemporaryDirectory() as d:
-        kb = Path(d)
-        (kb / "sample.md").write_text("intro text\n\n## 見出しA\n本文A\n\n## 見出しB\n本文B\n")
-        chunks = _split_into_chunks(kb)
-        headings = [c.heading for c in chunks]
-        assert "見出しA" in headings and "見出しB" in headings
-        assert any("本文A" in c.text for c in chunks)
 
 
 def test_http_header_parser_keeps_last_hop():

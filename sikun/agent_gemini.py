@@ -5,8 +5,8 @@ touched. Same public interface as sikun.agent.run_agent, same event-channel
 contract (report tool -> app.post_event). bash calls run against one
 long-lived sikun.tools.PersistentShell for the whole run (cd/env vars/
 background PIDs persist across calls), instead of a fresh subprocess per
-call. Reuses the system-prompt template and knowledge-base loader from
-sikun.agent by import rather than duplicating them.
+call. Reuses the system-prompt templates from sikun.agent by import rather
+than duplicating them.
 
 Verified empirically against the live API (not just docs) on 2026-07-25:
 - Async surface: client.aio.models.generate_content(...)
@@ -28,7 +28,6 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-from sikun import rag
 from sikun.agent import GENERAL_SYSTEM_PROMPT_TEMPLATE, SYSTEM_PROMPT_TEMPLATE
 from sikun.events import render_tool_call, render_tool_result
 from sikun.memory import TargetMemory
@@ -63,9 +62,6 @@ _TIER_THINKING_LEVEL = {"lite": types.ThinkingLevel.LOW, "full": types.ThinkingL
 # competing for the model's attention against whatever it's doing now.
 CONTEXT_KEEP_RECENT = int(os.environ.get("SIKUN_CONTEXT_KEEP_RECENT", "12"))
 CONTEXT_TRUNCATE_CHARS = 300
-# How many recent instruction/recon snippets feed the RAG query — kept short
-# so the query stays a query (topical), not the whole transcript.
-RAG_QUERY_SNIPPETS = 6
 
 # Standard paid-tier per-million-token USD rates. Thinking tokens are billed
 # as output tokens (confirmed on the pricing page, not just inferred).
@@ -224,38 +220,22 @@ TOOLS = types.Tool(
 
 
 def _build_config(
-    client: genai.Client,
     target: str,
-    rag_query: str,
     mode: str,
     tool_obj: types.Tool | None = None,
     persona: str = "",
-    kb_dir: Path | None = None,
     memory_summary: str = "",
 ) -> types.GenerateContentConfig:
     """Build a fresh GenerateContentConfig for the given mode ('security' or
-    'general'). Called at startup, whenever /mode changes, and whenever
-    `rag_query` drifts from what it was last built with (see
-    `_extract_recent_context`) — cheap enough (one embedding call for RAG,
-    cached chunk embeddings) to just rebuild rather than diff.
+    'general'). Called at startup, whenever /mode changes, and whenever the
+    per-target memory summary drifts (a new port/finding landed) — cheap
+    enough to just rebuild rather than diff.
 
-    `tool_obj` is the (possibly plugin-augmented) tool set, `persona` is the
-    active profile's extra system-prompt text, and `kb_dir` is the profile's
-    knowledge base — all default to the built-ins so a profile-less call still
-    works."""
+    `tool_obj` is the (possibly plugin-augmented) tool set and `persona` is
+    the active profile's extra system-prompt text — both default to the
+    built-ins so a profile-less call still works."""
     template = SYSTEM_PROMPT_TEMPLATE if mode == "security" else GENERAL_SYSTEM_PROMPT_TEMPLATE
-    knowledge_section = "(汎用モードのため知識ベース未使用)"
-    if mode == "security":
-        try:
-            retrieved = rag.retrieve(client, rag_query, top_k=4, kb_dir=kb_dir)
-            knowledge_section = (
-                f"# 参考知識ベース(タスクに関連しそうな箇所をRAGで抜粋・全文ではない)\n{retrieved}"
-                if retrieved
-                else "(知識ベース未登録 or 該当なし)"
-            )
-        except Exception:
-            knowledge_section = "(知識ベース検索エラーのため未使用)"
-    system_text = template.format(target=target, knowledge_section=knowledge_section)
+    system_text = template.format(target=target)
     if persona and persona.strip():
         system_text += f"\n\n# このエージェント固有の指示(プロファイル)\n{persona.strip()}\n"
     if memory_summary:
@@ -286,63 +266,6 @@ def _notify_board(app, **kwargs) -> None:
     updater = getattr(app, "update_board", None)
     if callable(updater):
         updater(**kwargs)
-
-
-def _extract_recent_context(contents: list[types.Content], target: str, max_snippets: int = RAG_QUERY_SNIPPETS) -> str:
-    """Build the RAG query from the tail of the conversation instead of
-    freezing it at the opening instruction: the most recent user
-    instructions, propose_plan steps, report() narrations, and (crucially)
-    the service/port names nmap_scan actually found. Walked from the end so
-    the query tracks whatever phase the operation is currently in — recon
-    vs. privesc vs. web-attack — pulling in a different slice of the
-    knowledge base (01_recon.md vs. 13_windows_privesc.md, etc.) as the work
-    moves on, rather than staring at the same 4 chunks the whole run."""
-    snippets: list[str] = []
-    for content in reversed(contents):
-        if len(snippets) >= max_snippets:
-            break
-        for part in content.parts or []:
-            if len(snippets) >= max_snippets:
-                break
-            if part.text:
-                snippets.append(part.text[:200])
-            elif part.function_call is not None:
-                name = part.function_call.name
-                args = part.function_call.args or {}
-                if name == "report":
-                    text = str(args.get("text", ""))
-                    if text:
-                        snippets.append(text[:200])
-                elif name == "nmap_scan":
-                    snippets.append(f"port scan target={args.get('target', '')} ports={args.get('ports', '')}")
-                elif name in ("http_probe", "dir_enum"):
-                    snippets.append(f"{name} url={args.get('url', '')}")
-                elif name == "propose_plan":
-                    snippets.append(str(args.get("steps", ""))[:200])
-            elif part.function_response is not None and part.function_response.name in (
-                "nmap_scan",
-                "http_probe",
-                "dir_enum",
-            ):
-                resp = part.function_response.response or {}
-                if part.function_response.name == "nmap_scan":
-                    services = ", ".join(
-                        f"{p.get('service', '')} {p.get('version', '')}".strip()
-                        for p in resp.get("open_ports", [])
-                    )
-                    if services:
-                        snippets.append(f"found services: {services}")
-                elif part.function_response.name == "http_probe":
-                    tech = ", ".join(resp.get("tech_hints", []))
-                    if tech:
-                        snippets.append(f"web tech: {tech} title={resp.get('title', '')}")
-                elif part.function_response.name == "dir_enum":
-                    found = ", ".join(f"{f.get('path')}" for f in resp.get("found", []))
-                    if found:
-                        snippets.append(f"paths found: {found}")
-    snippets.reverse()
-    query = " / ".join(s for s in snippets if s)
-    return query or target
 
 
 def _compact_old_context(contents: list[types.Content], keep_recent: int = CONTEXT_KEEP_RECENT) -> None:
@@ -432,10 +355,9 @@ async def run_agent(
     client = genai.Client()
     workdir = workdir or Path.home()
 
-    # Profile-driven config: personal knowledge base, persona, model override,
-    # and auto-loaded tool plugins — all optional, all falling back to the
-    # built-ins when the profile leaves them unset.
-    kb_dir = profile.knowledge_base
+    # Profile-driven config: persona, model override, and auto-loaded tool
+    # plugins — all optional, all falling back to the built-ins when the
+    # profile leaves them unset.
     persona = profile.persona
     full_model = profile.model or FULL_MODEL
     lite_model = LITE_MODEL
@@ -489,10 +411,9 @@ async def run_agent(
             f"[dim]前回までの記憶をロード(ポート{len(memory.ports)} / finding{len(memory.findings)}、最終 {memory.last_seen})[/dim]",
         )
 
-    rag_query = initial_instruction or target
     current_mode = app.session_state.get("mode", "security")
     config = _build_config(
-        client, target, rag_query, current_mode, tool_obj, persona, kb_dir, memory.summary_for_prompt()
+        target, current_mode, tool_obj, persona, memory.summary_for_prompt()
     )
 
     contents: list[types.Content] = []
@@ -517,11 +438,9 @@ async def run_agent(
             target,
             current_mode,
             0.0,
-            rag_query,
             plugin_map=plugin_map,
             tool_obj=tool_obj,
             persona=persona,
-            kb_dir=kb_dir,
             full_model=full_model,
             lite_model=lite_model,
             guard=guard,
@@ -542,12 +461,10 @@ async def _run_loop(
     target: str,
     current_mode: str,
     total_cost: float,
-    rag_query: str,
     *,
     plugin_map: dict[str, ToolPlugin] | None = None,
     tool_obj: types.Tool | None = None,
     persona: str = "",
-    kb_dir: Path | None = None,
     full_model: str = FULL_MODEL,
     lite_model: str = LITE_MODEL,
     guard: ScopeGuard | None = None,
@@ -568,6 +485,9 @@ async def _run_loop(
     # fixed ceiling, so a long-running task keeps checking in as it burns
     # through further chunks of budget instead of only stopping once.
     cost_checkpoint = MAX_COST if MAX_COST > 0 else None
+    # Track the memory summary the current config was built with, so a newly
+    # discovered port/finding refreshes the system prompt on the next turn.
+    memory_sig = memory.summary_for_prompt()
 
     while True:
         # No instruction yet (bare `target` with no --task) -> do nothing and
@@ -585,22 +505,19 @@ async def _run_loop(
         _compact_old_context(contents)
 
         # /mode can change between turns (operator typed it while we were
-        # mid-loop), and the RAG query drifts every turn as new instructions/
-        # recon land — rebuild the config once for whichever (or both)
-        # changed, instead of only reacting to /mode like before. This is
-        # what keeps retrieval pointed at the *current* phase (recon vs.
-        # privesc vs. web-attack) rather than whatever the opening
-        # instruction happened to be.
+        # mid-loop), and the per-target memory summary changes as new
+        # ports/findings land — rebuild the config once for whichever (or
+        # both) changed, so the system prompt keeps carrying the latest recall
+        # instead of freezing at whatever it was at startup.
         requested_mode = app.session_state.get("mode", "security")
-        new_rag_query = _extract_recent_context(contents, target)
-        if requested_mode != current_mode or new_rag_query != rag_query:
+        new_memory_sig = memory.summary_for_prompt()
+        if requested_mode != current_mode or new_memory_sig != memory_sig:
             if requested_mode != current_mode:
                 current_mode = requested_mode
                 await app.post_event("system", f"[dim]モード適用: {current_mode}[/dim]")
-            rag_query = new_rag_query
+            memory_sig = new_memory_sig
             config = _build_config(
-                client, target, rag_query, current_mode, tool_obj, persona, kb_dir,
-                memory.summary_for_prompt(),
+                target, current_mode, tool_obj, persona, new_memory_sig
             )
 
         # Same no-human-in-the-loop philosophy as agent.py: on a hard block,

@@ -8,7 +8,7 @@ recon→exploit の橋渡し。「ポートは開いてる、で止まる」を�
 2. 無ければ NVD の公開API(キー不要)に問い合わせて CVE 候補を返す
 どちらも使えなければ、その旨を notes で返す。
 
-このツールは**演習ホスト自体には接触しない**(外部のCVE DBを引くだけ)ので、
+このツールは**対象ホスト自体には接触しない**(外部のCVE DBを引くだけ)ので、
 scope_targets は空 = スコープ強制の対象外。
 """
 
@@ -157,7 +157,7 @@ PLUGIN = ToolPlugin(
         "ソフトの製品名(例: apache, nginx, openssh, mysql, php, vsftpd)。http_probe の server "
         "フィールドや nmap_scan の version からバージョンも一緒に渡すとヒット率が上がる。"
         "ローカルに searchsploit があれば優先し、無ければ NVD 公開APIに問い合わせる。"
-        "演習ホスト自体には接触しない。"
+        "対象ホスト自体には接触しない。"
     ),
     parameters={
         "type": "object",
@@ -179,5 +179,5 @@ PLUGIN = ToolPlugin(
     },
     run=_run,
     summary=_summary,
-    scope_targets=lambda args: [],  # 外部CVE DBを引くだけ。演習ホストに接触しない
+    scope_targets=lambda args: [],  # 外部CVE DBを引くだけ。対象ホストに接触しない
 )

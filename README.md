@@ -1,7 +1,7 @@
 # Sikun Cyber Security (SCS)
 
 **認可された対象に対する攻撃的セキュリティ診断(ペネトレーションテスト)を自律的に行うAIエージェント。**
-Gemini API をオーケストレーションの中核に据え(Claude にも切替可)、攻撃特化ツール・RAG知識ベース・
+Gemini API をオーケストレーションの中核に据え(Claude にも切替可)、攻撃特化ツール・プラグイン基盤・
 リッチターミナルUIを組み合わせて構築する。安価なLLM + 安全なスキャフォールディングで、
 偵察から実証・報告・検知ルール化までを一気通貫で自動化する。
 
@@ -47,11 +47,10 @@ python main.py --init myagent
 name = "myagent"
 provider = "gemini"           # または "claude"
 persona = "Web脆弱性診断が得意な慎重派。破壊的操作の前は必ず確認する。"
-knowledge_base = "knowledge_base"
 plugins = ["plugins"]
 ```
 
-provider / モデル / 性格(persona)/ 参照する知識ベース / プラグインの場所を、
+provider / モデル / 性格(persona)/ プラグインの場所を、
 **コードを書かずに** 切り替えられる。
 
 ### 3. 自作ツール(プラグイン)を追加
@@ -97,7 +96,7 @@ findings は**検証必須**: `report(finding)` は再現の証拠を `evidence`
 (許可する IP / CIDR / ホスト名)を設定できる。起動時に指定した対象は自動で許可される。
 
 ```toml
-# profiles/team3.toml
+# profiles/lab.toml
 scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
 ```
 
@@ -114,15 +113,14 @@ scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
 ## 構成
 
 - `main.py` — CLIエントリ(`--profile` / `--init` / `--provider` / `--ssh` / `--logs`)
-- `sikun/agent_gemini.py` — Gemini バックエンド・コア(RAG動的化・永続シェル・thinking配分・構造化ツール)
+- `sikun/agent_gemini.py` — Gemini バックエンド・コア(永続シェル・thinking配分・構造化ツール・永続メモリ)
 - `sikun/agent.py` — Claude バックエンド(tool-use ループ)
 - `sikun/tools.py` — bash / report / propose_plan + 構造化ツール(nmap_scan / http_probe / dir_enum)
 - `sikun/plugins.py` — **プラグイン基盤**(自作ツールの自動読み込み)
 - `sikun/profile.py` — **エージェント・プロファイル**(TOML設定)
 - `sikun/scaffold.py` — `--init` の雛形生成
-- `sikun/rag.py` — 知識ベースの埋め込み検索(RAG)
+- `sikun/memory.py` — ターゲット別の永続メモリ(セッション間でポート/finding を継続)
 - `sikun/tui.py` — Textual製リッチUI(トランスクリプト + 戦況ボード)
-- `knowledge_base/` — RAG用の攻撃手法・脆弱性情報
 - `profiles/` — エージェント・プロファイル(TOML)
 - `plugins/` — 自作ツール(プラグイン)
 

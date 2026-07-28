@@ -4,8 +4,8 @@
 ``.toml``). Every key is optional and falls back to the defaults below, so a
 bare ``--profile`` and the shipped ``default`` profile both Just Work. A
 profile chooses the provider/model, injects a persona into the system prompt,
-points RAG at a (possibly personal) knowledge base, and lists directories to
-auto-load tool plugins from. This is what lets each student build their own
+and lists directories to auto-load tool plugins from. This is what lets each
+student build their own
 agent without editing any core code — they write a profile and drop in
 plugins.
 """
@@ -18,7 +18,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROFILES_DIR = PROJECT_ROOT / "profiles"
-DEFAULT_KB = PROJECT_ROOT / "knowledge_base"
 DEFAULT_PLUGINS = PROJECT_ROOT / "plugins"
 
 VALID_PROVIDERS = {"claude", "gemini"}
@@ -30,7 +29,6 @@ class Profile:
     provider: str = "gemini"
     model: str | None = None
     persona: str = ""
-    knowledge_base: Path = DEFAULT_KB
     plugin_dirs: list[Path] = field(default_factory=lambda: [DEFAULT_PLUGINS])
     # Authorized target scope (IPs / CIDRs / hostnames). Empty == no enforcement.
     # Set this in the distributed build so an accidental out-of-scope command is
@@ -82,7 +80,6 @@ def _from_file(path: Path) -> Profile:
             f"{path.name}: provider は {sorted(VALID_PROVIDERS)} のいずれかにしてください(指定: {provider})"
         )
 
-    kb = data.get("knowledge_base")
     plugin_dirs = data.get("plugins")
     model = data.get("model")
     scope = data.get("scope") or []
@@ -94,7 +91,6 @@ def _from_file(path: Path) -> Profile:
         provider=provider,
         model=str(model) if model else None,
         persona=str(data.get("persona", "")),
-        knowledge_base=_resolve(kb) if kb else DEFAULT_KB,
         plugin_dirs=[_resolve(d) for d in plugin_dirs] if plugin_dirs else [DEFAULT_PLUGINS],
         scope=[str(x) for x in scope],
     )

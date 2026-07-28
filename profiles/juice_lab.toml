@@ -18,7 +18,6 @@ XSS/暗号/ビジネスロジックのチャレンジが難易度別(1〜6星)�
 - 破壊的操作の前は propose_plan で確認
 """
 
-knowledge_base = "knowledge_base"
 plugins = ["plugins"]
 
 # Juice Shop は 127.0.0.1:3000 に公開。localhostのみ許可。

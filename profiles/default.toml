@@ -13,9 +13,6 @@ provider = "gemini"
 # エージェント固有の性格・方針(システムプロンプトに追記)。既定は指定なし。
 persona = ""
 
-# RAG が参照する知識ベースのディレクトリ。
-knowledge_base = "knowledge_base"
-
 # プラグイン(自作ツール)を読み込むディレクトリ一覧。
 plugins = ["plugins"]
 

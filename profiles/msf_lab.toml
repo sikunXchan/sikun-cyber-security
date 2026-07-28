@@ -22,10 +22,6 @@ persona = """
 - 破壊的操作の前は propose_plan で確認を取る
 """
 
-# RAG が参照する知識ベースのディレクトリ(プロジェクトルートからの相対 or 絶対)。
-# 自分専用のノートを持ちたいなら knowledge_base_msf_lab/ などに分けてもよい。
-knowledge_base = "knowledge_base"
-
 # プラグイン(自作ツール)を読み込むディレクトリ一覧。
 # ここに置いた *.py が自動でツールとして登録されます。
 plugins = ["plugins"]
