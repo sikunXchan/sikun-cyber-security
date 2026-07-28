@@ -31,6 +31,7 @@ from google.genai import types
 from sikun import rag
 from sikun.agent import GENERAL_SYSTEM_PROMPT_TEMPLATE, SYSTEM_PROMPT_TEMPLATE
 from sikun.events import render_tool_call, render_tool_result
+from sikun.memory import TargetMemory
 from sikun.plugins import PluginContext, ToolPlugin, load_plugins
 from sikun.profile import Profile
 from sikun.scope import Scope, ScopeGuard, extract_hosts, guard_besteffort, guard_reliable
@@ -38,13 +39,11 @@ from sikun.tools import PersistentShell, preview_for_ui, run_dir_enum, run_http_
 from sikun.tui import LOG_DIR, Interrupted
 
 FULL_MODEL = os.environ.get("SIKUN_GEMINI_MODEL", "gemini-3.5-flash")
-# Released 2026-07-21 — ~5x cheaper input / ~3.6x cheaper output than full
-# Flash. Not separately benchmarked by us on this specific tool-use workload,
-# so it's opt-in via /model lite rather than the default: good for simple,
-# repetitive operations (port checks, straightforward recon) the operator
-# already judges as low-complexity; full Flash stays the safe default for
-# anything requiring careful multi-step judgment (plan proposals, exploit
-# chaining, finding verification).
+# lite (released 2026-07-21 — ~5x cheaper input / ~3.6x cheaper output than
+# full Flash) is the default tier: most turns are routine (port checks,
+# straightforward recon narration) and don't need full Flash's judgment.
+# /model full opts back into full Flash for turns that need careful
+# multi-step judgment (plan proposals, exploit chaining, finding verification).
 LITE_MODEL = os.environ.get("SIKUN_GEMINI_LITE_MODEL", "gemini-3.5-flash-lite")
 MAX_OUTPUT_TOKENS = 16000
 MAX_COST = float(os.environ.get("SIKUN_MAX_COST", "0"))  # 0 = no cap, just a heads-up warning
@@ -232,6 +231,7 @@ def _build_config(
     tool_obj: types.Tool | None = None,
     persona: str = "",
     kb_dir: Path | None = None,
+    memory_summary: str = "",
 ) -> types.GenerateContentConfig:
     """Build a fresh GenerateContentConfig for the given mode ('security' or
     'general'). Called at startup, whenever /mode changes, and whenever
@@ -258,6 +258,8 @@ def _build_config(
     system_text = template.format(target=target, knowledge_section=knowledge_section)
     if persona and persona.strip():
         system_text += f"\n\n# このエージェント固有の指示(プロファイル)\n{persona.strip()}\n"
+    if memory_summary:
+        system_text += f"\n\n{memory_summary}\n"
     return types.GenerateContentConfig(
         tools=[tool_obj if tool_obj is not None else TOOLS],
         system_instruction=system_text,
@@ -267,8 +269,10 @@ def _build_config(
 
 def _resolve_tier(app) -> str:
     """/model lite|full picks the model tier per-turn via session_state, same
-    polling pattern as /mode — takes effect on the next turn, no restart."""
-    return "lite" if app.session_state.get("model") == "lite" else "full"
+    polling pattern as /mode — takes effect on the next turn, no restart.
+    Default is lite; /model full opts back into the pricier tier for turns
+    that need deeper judgment."""
+    return "full" if app.session_state.get("model") == "full" else "lite"
 
 
 def _fmt_plugin_args(args: dict) -> str:
@@ -476,9 +480,20 @@ async def run_agent(
     await shell.start()
     await app.post_event("system", f"[dim]永続シェル起動(ssh_host={ssh_host or 'ローカル'})[/dim]")
 
+    # Per-target memory: recall prior ports/findings across sessions, and keep
+    # this session's findings salient regardless of context compaction.
+    memory = TargetMemory.load(target)
+    if memory.has_history():
+        await app.post_event(
+            "system",
+            f"[dim]前回までの記憶をロード(ポート{len(memory.ports)} / finding{len(memory.findings)}、最終 {memory.last_seen})[/dim]",
+        )
+
     rag_query = initial_instruction or target
     current_mode = app.session_state.get("mode", "security")
-    config = _build_config(client, target, rag_query, current_mode, tool_obj, persona, kb_dir)
+    config = _build_config(
+        client, target, rag_query, current_mode, tool_obj, persona, kb_dir, memory.summary_for_prompt()
+    )
 
     contents: list[types.Content] = []
     if initial_instruction:
@@ -510,6 +525,7 @@ async def run_agent(
             full_model=full_model,
             lite_model=lite_model,
             guard=guard,
+            memory=memory,
         )
     finally:
         await shell.stop()
@@ -535,10 +551,13 @@ async def _run_loop(
     full_model: str = FULL_MODEL,
     lite_model: str = LITE_MODEL,
     guard: ScopeGuard | None = None,
+    memory: TargetMemory | None = None,
 ) -> None:
     plugin_map = plugin_map or {}
     if guard is None:
         guard = ScopeGuard(Scope([]), LOG_DIR / "audit.log", target)
+    if memory is None:
+        memory = TargetMemory.load(target)
     # Plugins execute shell commands through the same persistent session the
     # rest of the agent uses, so cd/env/background PIDs they set stick too.
     plugin_ctx = PluginContext(
@@ -579,7 +598,10 @@ async def _run_loop(
                 current_mode = requested_mode
                 await app.post_event("system", f"[dim]モード適用: {current_mode}[/dim]")
             rag_query = new_rag_query
-            config = _build_config(client, target, rag_query, current_mode, tool_obj, persona, kb_dir)
+            config = _build_config(
+                client, target, rag_query, current_mode, tool_obj, persona, kb_dir,
+                memory.summary_for_prompt(),
+            )
 
         # Same no-human-in-the-loop philosophy as agent.py: on a hard block,
         # auto-append a rephrase nudge and retry once before ever bothering
@@ -714,6 +736,8 @@ async def _run_loop(
                     evidence = args.get("evidence")
                     await app.post_event(channel, text, severity)
                     if channel == "finding":
+                        memory.add_finding(severity, text, evidence or "")
+                        memory.save()
                         if evidence:
                             await app.post_event("system", f"[dim]  ⎿ 根拠: {evidence}[/dim]")
                         else:
@@ -760,6 +784,9 @@ async def _run_loop(
                     else:
                         ports_summary = "(開いているポートなし)"
                     _notify_board(app, ports=scan_result["open_ports"])
+                    if scan_result["open_ports"]:
+                        memory.add_ports(scan_result["open_ports"])
+                        memory.save()
                     await app.post_event("system", render_tool_result(ports_summary))
                     function_response_parts.append(
                         types.Part.from_function_response(name=fc.name, response=scan_result)

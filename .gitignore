@@ -18,6 +18,8 @@ venv/
 logs/
 # detection_rule プラグインが生成する Sigma ルール(各自の成果物)
 detections/
+# ターゲット別の永続メモリ(発見内容=各自の環境情報。共有しない)
+memory/
 # RAG埋め込みキャッシュ(再生成可能・大きい)
 knowledge_base/.embeddings_cache.json
 knowledge_base*/.embeddings_cache.json

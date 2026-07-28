@@ -72,7 +72,72 @@ PLAN_TOOL = {
     },
 }
 
-TOOLS = [BASH_TOOL, REPORT_TOOL, PLAN_TOOL]
+NMAP_SCAN_TOOL = {
+    "name": "nmap_scan",
+    "description": (
+        "対象ホストのポートスキャン・サービス検出を行い、構造化された結果(開いているポート・"
+        "サービス名・バージョン)を返す。bashでnmapコマンドを自分で組み立てて生の出力をパースする"
+        "より信頼性が高いので、ポートスキャンをしたい場合はこちらを優先して使うこと。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "target": {"type": "string", "description": "スキャン対象のIP/ホスト名"},
+            "ports": {
+                "type": "string",
+                "description": "ポート範囲(例: '1-1000', '22,80,443')。省略時は上位1000番",
+            },
+            "service_detection": {
+                "type": "boolean",
+                "description": "サービスバージョン検出(-sV)を行うか。デフォルトtrue",
+            },
+        },
+        "required": ["target"],
+    },
+}
+
+HTTP_PROBE_TOOL = {
+    "name": "http_probe",
+    "description": (
+        "対象URL/ホストにHTTPリクエストを送り、ステータスコード・レスポンスヘッダ・"
+        "ページタイトル・技術スタックの推測を構造化して返す。bashでcurlを叩いて生の"
+        "ヘッダやHTMLを自分で読むより信頼性が高いので、Webサービスの初期調査(何が"
+        "動いているかの把握)にはこちらを優先して使うこと。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "対象URL(例: 'http://192.168.1.1:8080/')。スキームを省略した場合はhttp://を補う",
+            },
+        },
+        "required": ["url"],
+    },
+}
+
+DIR_ENUM_TOOL = {
+    "name": "dir_enum",
+    "description": (
+        "対象URL配下のディレクトリ・ファイルを探索し、見つかったパスとステータスコードを"
+        "構造化して返す(gobusterが対象にあれば使用、無ければ組み込みの簡易ワードリストで"
+        "curlスイープにフォールバック)。隠しパネル・バックアップファイル・.git/.env等の"
+        "露出確認に使う。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "探索対象のベースURL"},
+            "wordlist": {
+                "type": "string",
+                "description": "カンマ区切りの探索パス一覧(省略時は組み込みの一般的なパス群を使用)",
+            },
+        },
+        "required": ["url"],
+    },
+}
+
+TOOLS = [BASH_TOOL, REPORT_TOOL, NMAP_SCAN_TOOL, HTTP_PROBE_TOOL, DIR_ENUM_TOOL, PLAN_TOOL]
 
 MAX_OUTPUT_CHARS = 8000
 UI_PREVIEW_CHARS = 700

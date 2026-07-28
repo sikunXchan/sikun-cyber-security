@@ -14,10 +14,11 @@ from pathlib import Path
 import anthropic
 
 from sikun.events import render_tool_call, render_tool_result
+from sikun.memory import TargetMemory
 from sikun.plugins import PluginContext, ToolPlugin, load_plugins
 from sikun.profile import Profile
 from sikun.scope import Scope, ScopeGuard, extract_hosts, guard_besteffort, guard_reliable
-from sikun.tools import TOOLS, preview_for_ui, run_bash
+from sikun.tools import TOOLS, preview_for_ui, run_bash, run_dir_enum, run_http_probe, run_nmap_scan
 from sikun.tui import LOG_DIR, Interrupted
 
 # Budget mode swaps the *defaults* only — an explicit SIKUN_MODEL/EFFORT/
@@ -223,12 +224,16 @@ def _load_knowledge_base(kb_dir: Path | None = None) -> str:
     return "# 参考知識ベース\n" + "\n\n".join(chunks)
 
 
-def _build_system_prompt(target: str, persona: str = "", kb_dir: Path | None = None) -> list[dict]:
+def _build_system_prompt(
+    target: str, persona: str = "", kb_dir: Path | None = None, memory_summary: str = ""
+) -> list[dict]:
     knowledge = _load_knowledge_base(kb_dir)
     knowledge_section = knowledge if knowledge else "(知識ベース未登録)"
     text = SYSTEM_PROMPT_TEMPLATE.format(target=target, knowledge_section=knowledge_section)
     if persona and persona.strip():
         text += f"\n\n# このエージェント固有の指示(プロファイル)\n{persona.strip()}\n"
+    if memory_summary:
+        text += f"\n\n{memory_summary}\n"
     return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
 
@@ -305,7 +310,17 @@ async def run_agent(
             "[bold yellow]⚠ スコープ未設定 — 範囲チェック無効。配布時は profile に scope を設定してください[/bold yellow]",
         )
 
-    system = _build_system_prompt(target, persona, kb_dir)
+    # Per-target memory: recall prior findings across sessions (Claude backend
+    # builds the system prompt once, so this is the cross-session recall path;
+    # in-session findings stay salient via the conversation history itself).
+    memory = TargetMemory.load(target)
+    if memory.has_history():
+        await app.post_event(
+            "system",
+            f"[dim]前回までの記憶をロード(ポート{len(memory.ports)} / finding{len(memory.findings)}、最終 {memory.last_seen})[/dim]",
+        )
+
+    system = _build_system_prompt(target, persona, kb_dir, memory.summary_for_prompt())
 
     messages: list[dict] = []
     if initial_instruction:
@@ -477,6 +492,8 @@ async def run_agent(
                     evidence = block.input.get("evidence")
                     await app.post_event(channel, text, severity)
                     if channel == "finding":
+                        memory.add_finding(severity, text, evidence or "")
+                        memory.save()
                         if evidence:
                             await app.post_event("system", f"[dim]  ⎿ 根拠: {evidence}[/dim]")
                         else:
@@ -486,6 +503,114 @@ async def run_agent(
                             )
                     tool_results.append(
                         {"type": "tool_result", "tool_use_id": block.id, "content": "ok"}
+                    )
+                elif block.name == "nmap_scan":
+                    args = block.input or {}
+                    nmap_target = args.get("target", "")
+                    if not nmap_target:
+                        tool_results.append(
+                            {"type": "tool_result", "tool_use_id": block.id, "content": "target が空です", "is_error": True}
+                        )
+                        continue
+                    scope_err = guard_reliable(guard, "nmap_scan", [nmap_target])
+                    if scope_err:
+                        await app.post_event("system", f"[bold red]{scope_err}[/bold red]")
+                        tool_results.append(
+                            {"type": "tool_result", "tool_use_id": block.id, "content": scope_err, "is_error": True}
+                        )
+                        continue
+                    await app.post_event(
+                        "system",
+                        render_tool_call(
+                            f"nmap_scan(target={nmap_target}, ports={args.get('ports') or '(top1000)'})"
+                        ),
+                    )
+                    scan_result = await run_nmap_scan(
+                        target=nmap_target,
+                        ports=args.get("ports", "") or "",
+                        service_detection=args.get("service_detection", True),
+                        ssh_host=ssh_host,
+                    )
+                    if scan_result["open_ports"]:
+                        ports_summary = ", ".join(
+                            f"{p['port']}/{p['protocol']} {p['service']}" for p in scan_result["open_ports"]
+                        )
+                    else:
+                        ports_summary = "(開いているポートなし)"
+                    _notify_board(app, ports=scan_result["open_ports"])
+                    await app.post_event("system", render_tool_result(ports_summary))
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(scan_result, ensure_ascii=False),
+                        }
+                    )
+                elif block.name == "http_probe":
+                    args = block.input or {}
+                    probe_url = args.get("url", "")
+                    if not probe_url:
+                        tool_results.append(
+                            {"type": "tool_result", "tool_use_id": block.id, "content": "url が空です", "is_error": True}
+                        )
+                        continue
+                    scope_err = guard_reliable(guard, "http_probe", [probe_url])
+                    if scope_err:
+                        await app.post_event("system", f"[bold red]{scope_err}[/bold red]")
+                        tool_results.append(
+                            {"type": "tool_result", "tool_use_id": block.id, "content": scope_err, "is_error": True}
+                        )
+                        continue
+                    await app.post_event("system", render_tool_call(f"http_probe(url={probe_url})"))
+                    probe_result = await run_http_probe(probe_url, ssh_host=ssh_host)
+                    summary = (
+                        f"status={probe_result['status']} "
+                        f"server={probe_result.get('server') or '(不明)'} "
+                        f"title={probe_result['title'] or '(なし)'} "
+                        f"tech={', '.join(probe_result['tech_hints']) or '(不明)'}"
+                    )
+                    await app.post_event("system", render_tool_result(summary))
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(probe_result, ensure_ascii=False),
+                        }
+                    )
+                elif block.name == "dir_enum":
+                    args = block.input or {}
+                    enum_url = args.get("url", "")
+                    if not enum_url:
+                        tool_results.append(
+                            {"type": "tool_result", "tool_use_id": block.id, "content": "url が空です", "is_error": True}
+                        )
+                        continue
+                    scope_err = guard_reliable(guard, "dir_enum", [enum_url])
+                    if scope_err:
+                        await app.post_event("system", f"[bold red]{scope_err}[/bold red]")
+                        tool_results.append(
+                            {"type": "tool_result", "tool_use_id": block.id, "content": scope_err, "is_error": True}
+                        )
+                        continue
+                    await app.post_event("system", render_tool_call(f"dir_enum(url={enum_url})"))
+                    enum_result = await run_dir_enum(
+                        enum_url, wordlist=args.get("wordlist", "") or "", ssh_host=ssh_host
+                    )
+                    if enum_result["found"]:
+                        found_summary = ", ".join(
+                            f"{f['path']}({f['status']})" for f in enum_result["found"]
+                        )
+                    else:
+                        found_summary = "(発見なし)"
+                    await app.post_event(
+                        "system", render_tool_result(f"[{enum_result['source']}] {found_summary}")
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(enum_result, ensure_ascii=False),
+                        }
                     )
                 elif block.name == "propose_plan":
                     plan_text = (

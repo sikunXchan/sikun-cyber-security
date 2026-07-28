@@ -19,6 +19,7 @@ from sikun.plugins import PluginContext, load_plugins
 from sikun.profile import PROJECT_ROOT, load_profile
 from sikun.rag import _split_into_chunks
 from sikun.scope import Scope, ScopeGuard, extract_hosts, guard_besteffort, guard_reliable
+from sikun.tools import TOOLS as CLAUDE_BUILTIN_TOOLS
 from sikun.tools import _guess_tech, _parse_http_headers
 from sikun.tui import SikunApp
 
@@ -443,6 +444,71 @@ def test_dir_enum_wordlist_expanded_for_discovery():
 
     for path in ("main.js.map", "metrics", "api-docs", ".git/HEAD"):
         assert path in _DEFAULT_DIR_WORDLIST, path
+
+
+def test_claude_and_gemini_backends_register_the_same_builtin_tools():
+    """SYSTEM_PROMPT_TEMPLATE (shared by both backends) instructs the model to
+    prefer nmap_scan/http_probe/dir_enum over raw bash, and tells cve_lookup
+    users to source product/version from nmap_scan/http_probe. That's a lie for
+    whichever backend doesn't actually register those tools. This exact gap
+    shipped once (agent.py advertised them in the prompt but never added them to
+    its `tools` list) — this test pins both backends' built-in tool names so it
+    can't silently regress."""
+    from sikun import agent_gemini
+
+    claude_names = {t["name"] for t in CLAUDE_BUILTIN_TOOLS}
+    gemini_names = {d.name for d in agent_gemini.TOOLS.function_declarations}
+    assert claude_names == gemini_names, (claude_names, gemini_names)
+
+
+def test_model_tier_defaults_to_lite():
+    from sikun.agent_gemini import _resolve_tier
+
+    class _FakeApp:
+        def __init__(self, state: dict) -> None:
+            self.session_state = state
+
+    assert _resolve_tier(_FakeApp({})) == "lite"
+    assert _resolve_tier(_FakeApp({"model": "full"})) == "full"
+    assert _resolve_tier(_FakeApp({"model": "lite"})) == "lite"
+
+
+def test_target_memory_persists_and_summarizes():
+    import sikun.memory as mem
+
+    with tempfile.TemporaryDirectory() as d:
+        # redirect memory dir to a temp location for the test
+        orig = mem.MEMORY_DIR
+        mem.MEMORY_DIR = Path(d)
+        try:
+            m = mem.TargetMemory.load("10.9.9.9")
+            assert not m.has_history()
+            m.add_ports([{"port": "21", "protocol": "tcp", "service": "ftp", "version": "vsftpd 2.3.4"}])
+            m.add_ports([{"port": "21", "protocol": "tcp", "service": "ftp"}])  # dup
+            m.add_finding("critical", "vsftpd backdoor RCE", "uid=0(root) via 6200")
+            m.add_finding("critical", "vsftpd backdoor RCE", "x")  # dup by (sev,text)
+            m.save()
+            assert len(m.ports) == 1 and len(m.findings) == 1
+
+            # reload from disk -> cross-session recall
+            m2 = mem.TargetMemory.load("10.9.9.9")
+            assert m2.has_history()
+            s = m2.summary_for_prompt()
+            assert "vsftpd 2.3.4" in s and "backdoor RCE" in s and "uid=0(root)" in s
+        finally:
+            mem.MEMORY_DIR = orig
+
+
+def test_target_memory_no_history_empty_summary():
+    import sikun.memory as mem
+
+    with tempfile.TemporaryDirectory() as d:
+        orig = mem.MEMORY_DIR
+        mem.MEMORY_DIR = Path(d)
+        try:
+            assert mem.TargetMemory.load("fresh.host").summary_for_prompt() == ""
+        finally:
+            mem.MEMORY_DIR = orig
 
 
 def _main() -> int:
