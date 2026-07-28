@@ -78,7 +78,7 @@ PLUGIN = ToolPlugin(
     parameters={{
         "type": "object",
         "properties": {{
-            "host": {{"type": "string", "description": "確認する対象ホスト(省略時は演習対象)"}},
+            "host": {{"type": "string", "description": "確認する対象ホスト(省略時は認可対象)"}},
         }},
         "required": [],
     }},

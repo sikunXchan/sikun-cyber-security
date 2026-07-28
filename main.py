@@ -62,7 +62,7 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="Sikun Cyber Security — attack-exercise agent")
-    parser.add_argument("target", nargs="?", help="演習で許可された対象 (IP/ホスト名)")
+    parser.add_argument("target", nargs="?", help="認可された対象 (IP/ホスト名/URL)")
     parser.add_argument(
         "--provider",
         choices=sorted(PROVIDERS),
@@ -119,7 +119,7 @@ def main() -> None:
     target = args.target
     if not target:
         print_banner()
-        target = input("\n対象ホスト(演習で許可された環境のみ): ").strip()
+        target = input("\n対象ホスト(認可された対象のみ): ").strip()
         if not target:
             print("対象が指定されていません。終了します。")
             sys.exit(1)
