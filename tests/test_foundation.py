@@ -410,6 +410,38 @@ def test_remediate_saves_file():
         saved.unlink(missing_ok=True)
 
 
+def test_metasploit_plugin_parses_scopes_and_degrades_cleanly():
+    # The msf RPC plugin must: parse module names/options, declare RHOSTS as a
+    # reliable scope target on the target-touching tool, keep read-only tools
+    # scope-free, and — crucially — return a clean error (never crash) when
+    # Metasploit isn't installed, since it's an optional external dependency.
+    from sikun.plugins import _import_file
+
+    mod = _import_file(PROJECT_ROOT / "plugins" / "metasploit.py")
+
+    assert mod._split_module("exploit/unix/ftp/vsftpd_234_backdoor") == ("exploit", "unix/ftp/vsftpd_234_backdoor")
+    assert mod._split_module("multi/handler") == (None, "multi/handler")  # no known prefix
+    assert mod._parse_options("RPORT=21, LHOST=10.0.0.1,SSL=false") == {
+        "RPORT": "21", "LHOST": "10.0.0.1", "SSL": "false",
+    }
+
+    by = {p.name: p for p in mod.PLUGINS}
+    # target-touching tool declares RHOSTS for hard scope enforcement; recon tools don't
+    assert by["msf_run"].scope_targets({"rhosts": "172.17.0.2", "module": "x"}) == ["172.17.0.2"]
+    assert by["msf_search"].scope_targets({"query": "x"}) == []
+    assert by["msf_session_run"].scope_targets({"session_id": "1"}) == []
+
+    # msfrpcd absent -> clean structured error, no exception
+    async def no_msf(cmd: str) -> str:
+        return "none\n" if "command -v msfrpcd" in cmd else ""
+
+    ctx = PluginContext(target="172.17.0.2", ssh_host=None, workdir=Path.home(), run=no_msf)
+    out = asyncio.run(by["msf_search"].run({"query": "vsftpd"}, ctx))
+    assert "error" in out and "metasploit-framework" in out["error"]
+    # required-arg validation happens before any RPC/shell work
+    assert "error" in asyncio.run(by["msf_run"].run({"module": "x"}, ctx))
+
+
 def test_study_mode_selects_learning_prompt_and_forbids_attacks():
     # /mode study (the daily-driver) must pick the study template — learning +
     # defensive analysis, explicitly no remote attacks and no executing

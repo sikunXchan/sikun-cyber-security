@@ -88,6 +88,10 @@ PLUGIN = ToolPlugin(
 
 - **`cve_lookup`** — recon で判明した製品名+バージョンから既知CVE/エクスプロイト候補を検索
   (searchsploit があれば優先、無ければ NVD 公開API)。recon→exploit の橋渡し
+- **`metasploit`** — Metasploit Framework を RPC(msfrpcd + pymetasploit3)経由で構造化操作。
+  `msf_search`(モジュール検索)/ `msf_module_info`(オプション確認)/ `msf_run`(実行・scope強制)/
+  `msf_sessions`(セッション一覧)/ `msf_session_run`(meterpreter/shell内でコマンド=ポストエクスプロイト)。
+  セッションはSCSセッション中維持される。要 `metasploit-framework`(OS側)+ `pymetasploit3`(pip)
 - **`privesc_enum`** — 足場取得後の Linux 権限昇格ベクタを一括列挙(sudo/SUID/capability/cron/
   書き込み可能ファイル/カーネル)。GTFOBins既知SUIDや NOPASSWD sudo を notable として抽出
 - **`remediate`** — 実証した finding の**修復アドバイス**(根本原因・具体的な修正手順・優先度・
