@@ -356,6 +356,74 @@ def test_detection_rule_saves_file():
         saved.unlink(missing_ok=True)
 
 
+def test_remediate_resolves_class_and_maps_priority():
+    from sikun.plugins import _import_file
+
+    mod = _import_file(PROJECT_ROOT / "plugins" / "remediate.py")
+
+    # free-form / alias / non-ascii class strings all resolve to canonical keys
+    assert mod._resolve_class("SQL injection in login")[0] == "sqli"
+    assert mod._resolve_class("IDOR")[0] == "broken_access_control"
+    assert mod._resolve_class("機密ファイルの露出")[0] == "sensitive_data_exposure"
+    assert mod._resolve_class("quantum bug")[0] is None  # unknown -> None
+
+    async def noop_run(cmd: str) -> str:
+        return ""
+
+    ctx = PluginContext(target="x", ssh_host=None, workdir=Path.home(), run=noop_run)
+
+    # severity -> priority is deterministic; curated fixes come through
+    out = asyncio.run(
+        mod.PLUGIN.run(
+            {"title": "t", "vuln_class": "sqli", "severity": "critical", "save": False}, ctx
+        )
+    )
+    assert out["priority"] == "P0" and out["cwe"] == "CWE-89" and out["fixes"]
+
+    # unknown class still produces generic advice (never crashes) with a note
+    unk = asyncio.run(mod.PLUGIN.run({"title": "t", "vuln_class": "quantum bug", "save": False}, ctx))
+    assert unk["fixes"] and any("未知" in n for n in unk["notes"])
+
+    # missing required args -> error, not exception
+    assert "error" in asyncio.run(mod.PLUGIN.run({"title": "t", "vuln_class": "", "save": False}, ctx))
+
+    # touches no host -> scope_targets empty (safe by construction)
+    assert mod.PLUGIN.scope_targets({"title": "t", "vuln_class": "sqli"}) == []
+
+
+def test_remediate_saves_file():
+    from sikun.plugins import _import_file
+
+    mod = _import_file(PROJECT_ROOT / "plugins" / "remediate.py")
+
+    async def noop_run(cmd: str) -> str:
+        return ""
+
+    ctx = PluginContext(target="x", ssh_host=None, workdir=Path.home(), run=noop_run)
+    out = asyncio.run(
+        mod.PLUGIN.run({"title": "unittest remediation tmp", "vuln_class": "xss", "save": True}, ctx)
+    )
+    saved = PROJECT_ROOT / out["saved_to"]
+    try:
+        assert saved.exists() and saved.read_text().startswith("# 修復アドバイス:")
+    finally:
+        saved.unlink(missing_ok=True)
+
+
+def test_coverage_gate_fires_once_after_work_in_security_mode():
+    # The coverage gate forces one breadth audit before the agent may conclude,
+    # but only when it actually did attack work this segment, only in security
+    # mode, and never twice for the same segment (no loop, no Q&A false-fire).
+    import sikun.agent_gemini as ag
+
+    assert ag._should_audit_coverage("security", True, False) is True  # worked, not yet audited
+    assert ag._should_audit_coverage("security", True, True) is False  # already audited -> no re-fire
+    assert ag._should_audit_coverage("security", False, False) is False  # no work -> pure Q&A, skip
+    assert ag._should_audit_coverage("general", True, False) is False  # not an attack engagement
+    # the nudge is breadth-oriented and explicitly permits 保留 (no runaway)
+    assert "網羅" in ag.COVERAGE_NUDGE and "保留" in ag.COVERAGE_NUDGE
+
+
 def test_report_tool_has_evidence_field():
     # finding verification loop: the report tool must accept an `evidence` arg
     import sikun.agent_gemini as ag

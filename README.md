@@ -81,6 +81,9 @@ PLUGIN = ToolPlugin(
   (searchsploit があれば優先、無ければ NVD 公開API)。recon→exploit の橋渡し
 - **`privesc_enum`** — 足場取得後の Linux 権限昇格ベクタを一括列挙(sudo/SUID/capability/cron/
   書き込み可能ファイル/カーネル)。GTFOBins既知SUIDや NOPASSWD sudo を notable として抽出
+- **`remediate`** — 実証した finding の**修復アドバイス**(根本原因・具体的な修正手順・優先度・
+  CWE/OWASP参照)を生成して `remediations/` に保存(ブルー/防御側)。攻撃を「見つけた」で
+  終わらせず、開発者がそのまま直せる形にする。優先度は severity から自動決定
 - **`detection_rule`** — 実行した攻撃を検知する Sigma ルールを生成して `detections/` に保存
   (パープル)。自分の攻撃がどのログ/フィールドで捕捉されるか分かる
 - **`reverse_dns`** — IPの逆引き(プラグインの書き方サンプル)
@@ -111,7 +114,7 @@ scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
 ## 構成
 
 - `main.py` — CLIエントリ(`--profile` / `--init` / `--ssh` / `--logs`)
-- `sikun/agent_gemini.py` — エージェント・コア(Gemini tool-use ループ・永続シェル・thinking配分・構造化ツール・永続メモリ・行き詰まり検知による戦略の自己修正)
+- `sikun/agent_gemini.py` — エージェント・コア(Gemini tool-use ループ・永続シェル・thinking配分・構造化ツール・永続メモリ・行き詰まり検知による戦略の自己修正・結論前の攻撃面の網羅チェック)
 - `sikun/prompts.py` — システムプロンプト・テンプレート(security / general モード)
 - `sikun/tools.py` — 永続シェル + 構造化ツール実装(nmap_scan / http_probe / dir_enum)
 - `sikun/plugins.py` — **プラグイン基盤**(自作ツールの自動読み込み)

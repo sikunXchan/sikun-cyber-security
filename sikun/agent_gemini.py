@@ -104,6 +104,41 @@ REPLAN_NUDGE = (
     "闇雲な再試行や、未達成なのに finding を出すこと(嘘の成功)は禁止。"
 )
 
+# Coverage gate: the observed failure mode was the OPPOSITE of flailing — the
+# agent did real work, then declared the engagement complete while high-value
+# attack surfaces it had literally already enumerated (an unsolved-challenge
+# list, a package.json.bak sitting in a listing) stayed untried. REPLAN can't
+# catch this: it fires on 4 consecutive *unproductive* tool-turns, but here the
+# agent voluntarily stops calling tools at all. So when the agent tries to
+# conclude after having done attack work this segment, force ONE breadth audit
+# first. This is the codex-security "coverage ledger" idea applied at the
+# completion boundary — breadth (don't leave surfaces untried), not depth
+# (don't stubbornly hammer one vector). It explicitly permits 保留 and fires at
+# most once per work segment, so it adds thoroughness without runaway.
+COVERAGE_NUDGE = (
+    "【網羅チェック】結論・最終報告に入る前に、攻撃面の棚卸しを必ず行うこと:\n"
+    "1. これまでの偵察で判明した攻撃面(エンドポイント/パラメータ/フォーム/公開ファイル/"
+    "確認したチャレンジ一覧など)を列挙する\n"
+    "2. そのうち実際に試したものと、まだ手を付けていないものを分ける\n"
+    "3. 未着手の中に影響度の高いベクタ(RCE > 危険なデシリアライズ > SSTI > SQLi > "
+    "認可バイパス/IDOR > SSRF > 機密ファイル露出 > XSS > パストラバーサル)が残っているなら、"
+    "結論に入らずそれを実際に試すこと\n"
+    "4. 各未着手ベクタは「試して成立/不成立」まで進めるか、十分試したうえで"
+    "「保留(要検証: 何が足りないか)」として recon に正直に記録するまでは、診断完了を名乗らないこと\n"
+    "注意: 1つのベクタに闇雲に固執する必要はない(数回で見切って保留に落としてよい)。"
+    "求めているのは深追いではなく取りこぼしのない網羅。未達成なのに finding を出すこと(嘘の成功)は禁止。"
+)
+
+
+def _should_audit_coverage(mode: str, did_work: bool, already_audited: bool) -> bool:
+    """Whether to force one coverage audit before letting the agent conclude.
+
+    Only in security mode, only after real attack work happened this segment,
+    and only once per segment — so an agent that quits early gets exactly one
+    "did you leave anything untried?" push, never an audit on a pure Q&A turn
+    and never a loop."""
+    return mode == "security" and did_work and not already_audited
+
 BASH_DECLARATION = types.FunctionDeclaration(
     name="bash",
     description="Execute a shell command and return its output.",
@@ -580,6 +615,11 @@ async def _run_loop(
     unproductive_streak = 0
     replan_cooldown = 0
     force_full_next = False
+    # Coverage-gate bookkeeping (see COVERAGE_NUDGE): did any attack work run
+    # since the last operator instruction, and have we already forced the
+    # one-per-segment breadth audit for this segment.
+    did_work_since_instruction = False
+    coverage_audit_done = False
 
     while True:
         # No instruction yet (bare `target` with no --task) -> do nothing and
@@ -956,6 +996,7 @@ async def _run_loop(
             continue
 
         if function_response_parts:
+            did_work_since_instruction = True
             if _turn_was_productive(candidate.content.parts, function_response_parts):
                 unproductive_streak = 0
             else:
@@ -975,10 +1016,26 @@ async def _run_loop(
                 replan_cooldown = REPLAN_COOLDOWN_TURNS
             continue
 
-        # No tool calls this turn — the agent is talking/waiting, not stuck.
+        # No tool calls this turn — the agent is concluding/waiting, not stuck.
         unproductive_streak = 0
+        # Coverage gate: if it did attack work this segment and is now trying to
+        # wrap up, force one breadth audit before accepting the conclusion — so
+        # an early "diagnosis complete" doesn't leave enumerated high-value
+        # surfaces untried. Fires at most once per segment (see COVERAGE_NUDGE).
+        if _should_audit_coverage(current_mode, did_work_since_instruction, coverage_audit_done):
+            await app.post_event(
+                "system",
+                "[bold cyan]⟳ 結論前に攻撃面の網羅を確認する高思考ターンを挟みます[/bold cyan]",
+            )
+            contents.append(types.Content(role="user", parts=[types.Part(text=COVERAGE_NUDGE)]))
+            force_full_next = True
+            coverage_audit_done = True
+            continue
         await app.post_event("system", "[dim]エージェント待機中 — 下の入力欄から指示を送れます[/dim]")
         instruction = await app.wait_for_instruction()
         if app.session_state.pop("force_plan", None):
             instruction = f"(操作を始める前に必ず propose_plan で計画を提示してください) {instruction}"
+        # New operator instruction starts a fresh work segment — reset the gate.
+        did_work_since_instruction = False
+        coverage_audit_done = False
         contents.append(types.Content(role="user", parts=[types.Part(text=instruction)]))

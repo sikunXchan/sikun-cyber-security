@@ -18,6 +18,8 @@ venv/
 logs/
 # detection_rule プラグインが生成する Sigma ルール(各自の成果物)
 detections/
+# remediate プラグインが生成する修復アドバイス(各自の成果物)
+remediations/
 # ターゲット別の永続メモリ(発見内容=各自の環境情報。共有しない)
 memory/
 
