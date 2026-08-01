@@ -365,6 +365,40 @@ def test_report_tool_has_evidence_field():
     assert "evidence" in props
 
 
+def test_turn_productivity_detection_drives_self_correction():
+    # The stall detector that triggers a re-plan turn: progress resets the
+    # streak, a flailing (empty/error) tool turn counts as unproductive.
+    from types import SimpleNamespace
+
+    from sikun.agent_gemini import _turn_was_productive
+
+    def call(name, **args):
+        return SimpleNamespace(function_call=SimpleNamespace(name=name, args=args), function_response=None)
+
+    def resp(name, response):
+        return SimpleNamespace(function_call=None, function_response=SimpleNamespace(name=name, response=response))
+
+    # productive signals
+    assert _turn_was_productive([call("report", channel="finding")], [])
+    assert _turn_was_productive([], [resp("nmap_scan", {"open_ports": [{"port": 22}]})])
+    assert _turn_was_productive([], [resp("dir_enum", {"found": [{"path": "/admin"}]})])
+    assert _turn_was_productive([], [resp("http_probe", {"status": "200"})])
+    assert _turn_was_productive([], [resp("bash", {"output": "x" * 60})])
+    # unproductive: no new ports, a 404, a short/errored shell
+    assert not _turn_was_productive(
+        [],
+        [
+            resp("nmap_scan", {"open_ports": []}),
+            resp("http_probe", {"status": "404"}),
+            resp("bash", {"output": "", "error": "connection refused"}),
+        ],
+    )
+    # long BUT failing shell output is a flail, not progress
+    assert not _turn_was_productive(
+        [], [resp("bash", {"output": "curl: (7) Failed to connect to host: Connection refused\n" * 2})]
+    )
+
+
 def test_privesc_enum_parses_and_flags_notable():
     from sikun.plugins import _import_file
 

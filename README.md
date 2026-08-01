@@ -111,7 +111,7 @@ scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
 ## 構成
 
 - `main.py` — CLIエントリ(`--profile` / `--init` / `--ssh` / `--logs`)
-- `sikun/agent_gemini.py` — エージェント・コア(Gemini tool-use ループ・永続シェル・thinking配分・構造化ツール・永続メモリ)
+- `sikun/agent_gemini.py` — エージェント・コア(Gemini tool-use ループ・永続シェル・thinking配分・構造化ツール・永続メモリ・行き詰まり検知による戦略の自己修正)
 - `sikun/prompts.py` — システムプロンプト・テンプレート(security / general モード)
 - `sikun/tools.py` — 永続シェル + 構造化ツール実装(nmap_scan / http_probe / dir_enum)
 - `sikun/plugins.py` — **プラグイン基盤**(自作ツールの自動読み込み)
