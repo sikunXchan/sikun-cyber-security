@@ -410,6 +410,24 @@ def test_remediate_saves_file():
         saved.unlink(missing_ok=True)
 
 
+def test_study_mode_selects_learning_prompt_and_forbids_attacks():
+    # /mode study (the daily-driver) must pick the study template — learning +
+    # defensive analysis, explicitly no remote attacks and no executing
+    # untrusted code — not the offensive or general one.
+    import sikun.agent_gemini as ag
+
+    sec = ag._build_config("x", "security").system_instruction
+    study = ag._build_config("x", "study").system_instruction
+    general = ag._build_config("x", "general").system_instruction
+
+    assert study != sec and study != general
+    assert "学習" in study and "解析" in study
+    # the safety spine: no attacks, never run suspicious code, redirect to security
+    assert "実行しない" in study and "/mode security" in study
+    # unknown mode still falls back to the general assistant (no crash)
+    assert ag._build_config("x", "banana").system_instruction == general
+
+
 def test_coverage_gate_fires_once_after_work_in_security_mode():
     # The coverage gate forces one breadth audit before the agent may conclude,
     # but only when it actually did attack work this segment, only in security

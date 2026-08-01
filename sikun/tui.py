@@ -108,6 +108,7 @@ class SikunApp(App):
         target: str = "(未設定)",
         agent_factory: AgentFactory | None = None,
         profile_name: str = "default",
+        start_mode: str = "security",
     ) -> None:
         super().__init__()
         self.target = target
@@ -129,7 +130,7 @@ class SikunApp(App):
         # The agent loop polls this dict each turn rather than being handed a
         # one-shot config, so a switch takes effect on the *next* turn without
         # restarting the session.
-        self.session_state: dict[str, str] = {"mode": "security", "effort": "default"}
+        self.session_state: dict[str, str] = {"mode": start_mode, "effort": "default"}
         self._choice_future: asyncio.Future[str] | None = None
         self._interrupt_event = asyncio.Event()
 
@@ -312,8 +313,10 @@ class SikunApp(App):
         cmd, arg = parts[0].lower(), (parts[1].strip() if len(parts) > 1 else "")
 
         if cmd == "mode":
-            if arg not in ("security", "general"):
-                await self.post_event("system", "[bold red]使い方: /mode security|general[/bold red]")
+            if arg not in ("security", "study", "general"):
+                await self.post_event(
+                    "system", "[bold red]使い方: /mode security|study|general[/bold red]"
+                )
                 return
             self.session_state["mode"] = arg
             await self.post_event(

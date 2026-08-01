@@ -24,11 +24,20 @@ APIキーは各自で用意する(`.env` は Git にコミットされない)。
 ## 実行
 
 ```bash
-python main.py <対象ホスト>                    # 既定(default)プロファイルで起動
+python main.py <対象ホスト>                    # 攻撃診断モード(既定プロファイル)で起動
+python main.py --study                         # 学習・解析モードで起動(対象ホスト不要・毎日使える)
 python main.py <対象ホスト> --profile web       # 自分のプロファイルで起動
 python main.py <対象ホスト> --ssh user@pi       # 対象LAN上のホスト経由でbash実行
 python main.py --logs                          # 過去セッションのログ一覧
 ```
+
+3つのモード(セッション中に `/mode` で切替可):
+
+- **`security`(攻撃診断)** — 認可された対象へのペネトレーションテスト。偵察→実証→報告→修復・検知。
+  認可された標的が要るので**たまに使う**「見せ場」
+- **`study`(学習・解析)** — 攻撃せず、CVE/攻撃手法の学習・セキスペ対策・持ち込んだ成果物
+  (コード/設定/難読化スクリプト/ログ/依存)の防御的な静的解析。標的不要で**毎日開ける**常用モード
+- **`general`(汎用)** — セキュリティに限らない一般的な作業アシスタント
 
 ## 自分専用エージェントの作り方
 
@@ -137,7 +146,7 @@ pip install -r requirements-dev.txt && pytest
 
 入力欄で使えるスラッシュコマンド:
 
-- `/mode security|general` — 攻撃モード / 汎用アシスタントモード
+- `/mode security|study|general` — 攻撃診断 / 学習・解析 / 汎用アシスタント
 - `/model lite|full` — 軽量モデル / 通常モデル(Gemini)
 - `/plan` — 次のタスクで計画提示を強制
 - `Esc` — 実行中のターンを中断

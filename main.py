@@ -73,6 +73,11 @@ def main() -> None:
     )
     parser.add_argument("--task", dest="initial_instruction", help="初期指示文を直接指定(省略時は対話プロンプト)")
     parser.add_argument(
+        "--study",
+        action="store_true",
+        help="学習・解析モードで起動(攻撃せず、CVE/手法の学習や成果物の防御的解析に使う)。対象ホスト不要",
+    )
+    parser.add_argument(
         "--logs",
         nargs="?",
         const="__list__",
@@ -96,13 +101,22 @@ def main() -> None:
         print(f"プロファイル読み込みエラー: {exc}")
         sys.exit(1)
 
+    start_mode = "study" if args.study else "security"
+
     target = args.target
     if not target:
-        print_banner()
-        target = input("\n対象ホスト(認可された対象のみ): ").strip()
-        if not target:
-            print("対象が指定されていません。終了します。")
-            sys.exit(1)
+        if start_mode == "study":
+            # Study/analysis mode has no attack target — don't force one. The
+            # "target" is just a label; the real subject is whatever the user
+            # brings to analyze or ask about. This is what lets SCS be opened
+            # daily without the "need an authorized host first" friction.
+            target = "(学習/解析モード)"
+        else:
+            print_banner()
+            target = input("\n対象ホスト(認可された対象のみ): ").strip()
+            if not target:
+                print("対象が指定されていません。終了します。")
+                sys.exit(1)
 
     app = SikunApp(
         target=target,
@@ -114,6 +128,7 @@ def main() -> None:
             profile=profile,
         ),
         profile_name=profile.name,
+        start_mode=start_mode,
     )
     app.run()
 

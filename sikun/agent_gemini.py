@@ -26,7 +26,11 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-from sikun.prompts import GENERAL_SYSTEM_PROMPT_TEMPLATE, SYSTEM_PROMPT_TEMPLATE
+from sikun.prompts import (
+    GENERAL_SYSTEM_PROMPT_TEMPLATE,
+    STUDY_SYSTEM_PROMPT_TEMPLATE,
+    SYSTEM_PROMPT_TEMPLATE,
+)
 from sikun.events import render_tool_call, render_tool_result
 from sikun.memory import TargetMemory
 from sikun.plugins import PluginContext, ToolPlugin, load_plugins
@@ -286,15 +290,18 @@ def _build_config(
     persona: str = "",
     memory_summary: str = "",
 ) -> types.GenerateContentConfig:
-    """Build a fresh GenerateContentConfig for the given mode ('security' or
-    'general'). Called at startup, whenever /mode changes, and whenever the
-    per-target memory summary drifts (a new port/finding landed) — cheap
-    enough to just rebuild rather than diff.
+    """Build a fresh GenerateContentConfig for the given mode ('security',
+    'study', or 'general'). Called at startup, whenever /mode changes, and
+    whenever the per-target memory summary drifts (a new port/finding landed) —
+    cheap enough to just rebuild rather than diff.
 
     `tool_obj` is the (possibly plugin-augmented) tool set and `persona` is
     the active profile's extra system-prompt text — both default to the
     built-ins so a profile-less call still works."""
-    template = SYSTEM_PROMPT_TEMPLATE if mode == "security" else GENERAL_SYSTEM_PROMPT_TEMPLATE
+    template = {
+        "security": SYSTEM_PROMPT_TEMPLATE,
+        "study": STUDY_SYSTEM_PROMPT_TEMPLATE,
+    }.get(mode, GENERAL_SYSTEM_PROMPT_TEMPLATE)
     system_text = template.format(target=target)
     if persona and persona.strip():
         system_text += f"\n\n# このエージェント固有の指示(プロファイル)\n{persona.strip()}\n"
