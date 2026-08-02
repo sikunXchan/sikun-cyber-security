@@ -16,18 +16,21 @@ from rich.markup import escape
 Channel = Literal["recon", "exploit", "finding", "system"]
 Severity = Literal["critical", "high", "medium", "low", "info"]
 
+# Neon-cyberpunk palette: cyan is the base signal, magenta/pink is impact,
+# amber is caution. Hex so the look is consistent across terminal themes.
 _SEVERITY_STYLE = {
-    "critical": "bold white on red",
-    "high": "bold red",
-    "medium": "bold yellow",
-    "low": "yellow",
-    "info": "dim",
+    "critical": "bold #ffffff on #ff0059",
+    "high": "bold #ff3bd6",
+    "medium": "bold #ffb000",
+    "low": "#00f0ff",
+    "info": "dim #6a7a99",
 }
 
+# Channel = a colored, glyph-tagged log tag, hacker-console style ([▸]/[⚡]/[✖]).
 _CHANNEL_LABEL = {
-    "recon": "[cyan]Recon[/cyan]",
-    "exploit": "[yellow]Exploit[/yellow]",
-    "finding": "[bold red]Finding[/bold red]",
+    "recon": "[bold #00f0ff]▸ RECON[/bold #00f0ff]",
+    "exploit": "[bold #b26bff]⚡ EXPLOIT[/bold #b26bff]",
+    "finding": "[bold #ff3bd6]✖ FINDING[/bold #ff3bd6]",
 }
 
 
@@ -36,16 +39,16 @@ def render_tool_call(label: str) -> str:
     '⏺ Bash(nmap -Pn 192.168.1.1)' — mirrors Claude Code's tool-call style
     so the transcript reads as one linear stream of actions, not a wall of
     raw command echoes."""
-    return f"[bold]⏺[/bold] {escape(label)}"
+    return f"[bold #00f0ff]⏺[/bold #00f0ff] [#c0f7ff]{escape(label)}[/#c0f7ff]"
 
 
 def render_tool_result(output: str) -> str:
     """Format tool output indented under its call line ('  ⎿  ...'), dimmed,
     matching the collapsed-result look of Claude Code's transcript."""
     lines = (output or "(no output)").splitlines() or ["(no output)"]
-    rendered = [f"  [dim]⎿[/dim]  [dim]{escape(lines[0])}[/dim]"]
+    rendered = [f"  [#2b6f8f]⎿[/#2b6f8f]  [dim #7fa8bf]{escape(lines[0])}[/dim #7fa8bf]"]
     for line in lines[1:]:
-        rendered.append(f"     [dim]{escape(line)}[/dim]")
+        rendered.append(f"     [dim #7fa8bf]{escape(line)}[/dim #7fa8bf]")
     return "\n".join(rendered)
 
 
@@ -66,7 +69,7 @@ class AgentEvent:
                 return self.text
             style = _SEVERITY_STYLE[self.severity]
             return f"[{style}]{self.text}[/{style}]"
-        prefix = f"[bold]⏺[/bold] {_CHANNEL_LABEL[self.channel]}: "
+        prefix = f"[bold #00f0ff]⏺[/bold #00f0ff] {_CHANNEL_LABEL[self.channel]}[dim #6a7a99] ›[/dim #6a7a99] "
         if self.severity is not None:
             style = _SEVERITY_STYLE[self.severity]
             return f"{prefix}[{style}]{escape(self.text)}[/{style}]"
