@@ -410,6 +410,44 @@ def test_remediate_saves_file():
         saved.unlink(missing_ok=True)
 
 
+def test_ghidra_plugin_extracts_output_and_degrades_cleanly():
+    # The Ghidra headless plugin must: slice the script's marked output from the
+    # framework's verbose log, build a valid analyzeHeadless command, touch no
+    # target host (local file analysis), and return a clean error when Ghidra
+    # isn't installed or the binary is missing (never crash / never hang the
+    # loop on an exception).
+    from sikun.plugins import _import_file
+
+    mod = _import_file(PROJECT_ROOT / "plugins" / "ghidra.py")
+
+    marked = "log noise\n" + mod._BEGIN + "\nint main(){ return 0; }\n" + mod._END + "\ntail"
+    assert mod._extract_between(marked) == "int main(){ return 0; }"
+    assert mod._extract_between("no markers at all") is None  # script didn't run
+
+    cmd = mod._headless_command("/tmp/a.bin", "main", "/tmp/sikun_ghidra", "s.py")
+    assert "-import /tmp/a.bin" in cmd and "-postScript" in cmd and "-deleteProject" in cmd
+
+    assert mod.PLUGIN.scope_targets({"binary": "/tmp/a.bin"}) == []  # local-only, no host contact
+
+    # binary present but Ghidra absent -> clean structured error
+    async def no_ghidra(cmd: str) -> str:
+        if "test -f" in cmd:
+            return "yes\n"
+        return "none\n"  # analyzeHeadless probe finds nothing
+
+    ctx = PluginContext(target="x", ssh_host=None, workdir=Path.home(), run=no_ghidra)
+    out = asyncio.run(mod.PLUGIN.run({"binary": "/tmp/a.bin"}, ctx))
+    assert "error" in out and "Ghidra" in out["error"]
+
+    # missing file / missing arg validated before any heavy work
+    async def no_file(cmd: str) -> str:
+        return "no\n"
+
+    ctx2 = PluginContext(target="x", ssh_host=None, workdir=Path.home(), run=no_file)
+    assert "error" in asyncio.run(mod.PLUGIN.run({"binary": "/nope"}, ctx2))
+    assert "error" in asyncio.run(mod.PLUGIN.run({}, ctx2))
+
+
 def test_metasploit_plugin_parses_scopes_and_degrades_cleanly():
     # The msf RPC plugin must: parse module names/options, declare RHOSTS as a
     # reliable scope target on the target-touching tool, keep read-only tools

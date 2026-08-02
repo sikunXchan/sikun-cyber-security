@@ -94,6 +94,9 @@ PLUGIN = ToolPlugin(
   セッションはSCSセッション中維持される。要 `metasploit-framework`(OS側)+ `pymetasploit3`(pip)
 - **`privesc_enum`** — 足場取得後の Linux 権限昇格ベクタを一括列挙(sudo/SUID/capability/cron/
   書き込み可能ファイル/カーネル)。GTFOBins既知SUIDや NOPASSWD sudo を notable として抽出
+- **`ghidra_decompile`** — Ghidra のヘッドレス解析で、ソースの無いバイナリ(.exe/ELF/マルウェア/
+  CTFのrev/ファームウェア)を逆コンパイルし擬似Cを返す。**「Ghidraを読めない」人の代わりに AI が
+  読んで説明・脆弱性指摘する**のが狙い。GUI不使用。ソースがあるものには使わない。要 Ghidra(GHIDRA_HOME)
 - **`remediate`** — 実証した finding の**修復アドバイス**(根本原因・具体的な修正手順・優先度・
   CWE/OWASP参照)を生成して `remediations/` に保存(ブルー/防御側)。攻撃を「見つけた」で
   終わらせず、開発者がそのまま直せる形にする。優先度は severity から自動決定
