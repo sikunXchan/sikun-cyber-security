@@ -410,30 +410,29 @@ def test_remediate_saves_file():
         saved.unlink(missing_ok=True)
 
 
-def test_ghidra_plugin_extracts_output_and_degrades_cleanly():
-    # The Ghidra headless plugin must: slice the script's marked output from the
-    # framework's verbose log, build a valid analyzeHeadless command, touch no
-    # target host (local file analysis), and return a clean error when Ghidra
-    # isn't installed or the binary is missing (never crash / never hang the
-    # loop on an exception).
+def test_ghidra_plugin_builds_java_command_and_degrades_cleanly():
+    # The Ghidra headless plugin (verified end-to-end on Ghidra 12.1.2) must:
+    # use a Java GhidraScript (Ghidra 12 dropped Jython, so a .py postScript
+    # would fail with "Python is not available"), build a valid analyzeHeadless
+    # command that writes to an output file, touch no target host, and return a
+    # clean error when Ghidra is absent or the binary is missing (never crash).
     from sikun.plugins import _import_file
 
     mod = _import_file(PROJECT_ROOT / "plugins" / "ghidra.py")
 
-    marked = "log noise\n" + mod._BEGIN + "\nint main(){ return 0; }\n" + mod._END + "\ntail"
-    assert mod._extract_between(marked) == "int main(){ return 0; }"
-    assert mod._extract_between("no markers at all") is None  # script didn't run
+    # the postScript is Java, not Python — this is the fix that makes it run on Ghidra 12+
+    assert mod._SCRIPT_NAME.endswith(".java")
+    assert "extends GhidraScript" in mod._DECOMPILE_SCRIPT
 
-    cmd = mod._headless_command("/tmp/a.bin", "main", "/tmp/sikun_ghidra", "s.py")
+    cmd = mod._headless_command("/tmp/a.bin", "greet", "/tmp/sikun_ghidra", mod._SCRIPT_NAME, "/tmp/o.txt")
     assert "-import /tmp/a.bin" in cmd and "-postScript" in cmd and "-deleteProject" in cmd
+    assert "greet /tmp/o.txt" in cmd  # function + output path passed as script args
 
     assert mod.PLUGIN.scope_targets({"binary": "/tmp/a.bin"}) == []  # local-only, no host contact
 
     # binary present but Ghidra absent -> clean structured error
     async def no_ghidra(cmd: str) -> str:
-        if "test -f" in cmd:
-            return "yes\n"
-        return "none\n"  # analyzeHeadless probe finds nothing
+        return "yes\n" if "test -f" in cmd else "none\n"  # file exists; headless probe finds nothing
 
     ctx = PluginContext(target="x", ssh_host=None, workdir=Path.home(), run=no_ghidra)
     out = asyncio.run(mod.PLUGIN.run({"binary": "/tmp/a.bin"}, ctx))

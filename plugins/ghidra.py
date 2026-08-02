@@ -8,9 +8,13 @@ CTFのrev/ファームウェア/クローズドソース)」解析の中核。�
 
 対象ホストには接触しない(手元のバイナリファイルを解析するだけ)ので scope_targets は空。
 
-重要(正直な前提): 逆コンパイルは Ghidra 標準の DecompInterface イディオムで書いているが、
-本開発環境に Ghidra が無いため**生きた実行は Ghidra 導入環境での確認が必要**。Ghidra 未導入・
-解析失敗時はクラッシュせず明確なエラーを返す。
+実装メモ(実機検証済み — Ghidra 12.1.2 で確認):
+- postScript は **Java の GhidraScript** で書く。Ghidra 11.3+/12 は Jython を廃止しており、`.py`
+  スクリプトは PyGhidra 前提になったため、追加依存の要らない Java(.java は自動コンパイルされる)
+  を採用。JDK は Ghidra 自体が要求するので必ずある。
+- 逆コンパイル結果は analyzeHeadless の饒舌なログに紛れさせず、**専用ファイルに書き出して読む**。
+- analyzeHeadless はプロジェクト格納ディレクトリが既存であることを要求する(自動でmkdirしない)。
+- Ghidra 未導入 / ファイル不在 / 解析失敗でもクラッシュせず明確なエラーを返す。
 """
 
 from __future__ import annotations
@@ -25,85 +29,87 @@ _HEADLESS_CANDIDATES = (
     "analyzeHeadless",
     "/opt/ghidra/support/analyzeHeadless",
 )
-_GLOB_CANDIDATE = "/opt/ghidra*/support/analyzeHeadless"
+# GHIDRA_HOME 未設定でも拾えるよう、よくある展開先を glob で探す
+_GLOB_CANDIDATES = ("/opt/ghidra*/support/analyzeHeadless", "$HOME/ghidra/ghidra_*_PUBLIC/support/analyzeHeadless")
 
-# スクリプト出力をフレームワークの饒舌なログから切り出すためのマーカー
-_BEGIN = "===SIKUN_GHIDRA_BEGIN==="
-_END = "===SIKUN_GHIDRA_END==="
+_WORK_DIR = "/tmp/sikun_ghidra"
+_SCRIPT_NAME = "SikunDecompile.java"  # クラス名=ファイル名(GhidraScriptの規約)
+_OUT_FILE = _WORK_DIR + "/out.txt"
+_PROJ_NAME = "sikun_tmp"
 
-_SCRIPT_DIR = "/tmp/sikun_ghidra"
-_SCRIPT_NAME = "sikun_decompile.py"
+# Ghidra ヘッドレス用 Java GhidraScript。postScript として実行され、指定関数(既定 main、
+# 無ければ entry、それも無ければ関数名一覧)を逆コンパイルして出力ファイルに書き出す。
+# args[0]=関数名 / args[1]=出力パス。DecompInterface は Ghidra 逆コンパイルの標準API。
+_DECOMPILE_SCRIPT = """import ghidra.app.script.GhidraScript;
+import ghidra.app.decompiler.DecompInterface;
+import ghidra.app.decompiler.DecompileResults;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionManager;
+import ghidra.util.task.ConsoleTaskMonitor;
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.List;
 
-# Ghidra ヘッドレス用 Jython(Python2系)スクリプト。postScript として実行され、
-# 指定関数(既定 main、無ければ entry、それも無ければ関数名一覧)を逆コンパイルして
-# マーカー間に擬似Cを出力する。DecompInterface は Ghidra 逆コンパイルの標準API。
-_DECOMPILE_SCRIPT = """# -*- coding: utf-8 -*-
-from ghidra.app.decompiler import DecompInterface
-from ghidra.util.task import ConsoleTaskMonitor
+public class SikunDecompile extends GhidraScript {
+    public void run() throws Exception {
+        String[] args = getScriptArgs();
+        String want = args.length > 0 ? args[0] : "main";
+        String outPath = args.length > 1 ? args[1] : "/tmp/sikun_ghidra/out.txt";
+        int limit = 40;
 
-args = getScriptArgs()
-want = args[0] if len(args) > 0 else "main"
-limit = 40
+        DecompInterface decomp = new DecompInterface();
+        decomp.openProgram(currentProgram);
+        ConsoleTaskMonitor monitor = new ConsoleTaskMonitor();
+        FunctionManager fm = currentProgram.getFunctionManager();
+        List<Function> funcs = new ArrayList<Function>();
+        for (Function f : fm.getFunctions(true)) funcs.add(f);
 
-decomp = DecompInterface()
-decomp.openProgram(currentProgram)
-monitor = ConsoleTaskMonitor()
-fm = currentProgram.getFunctionManager()
-
-funcs = []
-it = fm.getFunctions(True)
-while it.hasNext():
-    funcs.append(it.next())
-
-def emit(func):
-    res = decomp.decompileFunction(func, 60, monitor)
-    print("// FUNCTION: " + func.getName() + " @ " + str(func.getEntryPoint()))
-    if res is not None and res.decompileCompleted():
-        print(res.getDecompiledFunction().getC())
-    else:
-        print("// (decompile failed for " + func.getName() + ")")
-
-print("%s" % "===SIKUN_GHIDRA_BEGIN===")
-if want.upper() == "ALL":
-    for f in funcs[:limit]:
-        emit(f)
-else:
-    match = [f for f in funcs if f.getName() == want]
-    if len(match) == 0 and want == "main":
-        # main が無ければ entry を試す
-        match = [f for f in funcs if f.getName() in ("entry", "_start", "start")]
-    if len(match) == 0:
-        print("// function '%s' not found. available functions:" % want)
-        for f in funcs[:300]:
-            print("//   " + f.getName())
-    else:
-        for f in match:
-            emit(f)
-print("%s" % "===SIKUN_GHIDRA_END===")
+        PrintWriter w = new PrintWriter(outPath, "UTF-8");
+        try {
+            List<Function> match = new ArrayList<Function>();
+            if (want.equalsIgnoreCase("ALL")) {
+                for (int i = 0; i < funcs.size() && i < limit; i++) match.add(funcs.get(i));
+            } else {
+                for (Function f : funcs) if (f.getName().equals(want)) match.add(f);
+                if (match.isEmpty() && want.equals("main")) {
+                    for (Function f : funcs) {
+                        String n = f.getName();
+                        if (n.equals("entry") || n.equals("_start") || n.equals("start")) match.add(f);
+                    }
+                }
+            }
+            if (match.isEmpty()) {
+                w.println("// function '" + want + "' not found. available functions:");
+                for (int i = 0; i < funcs.size() && i < 300; i++)
+                    w.println("//   " + funcs.get(i).getName());
+            } else {
+                for (Function f : match) {
+                    w.println("// FUNCTION: " + f.getName() + " @ " + f.getEntryPoint());
+                    DecompileResults res = decomp.decompileFunction(f, 60, monitor);
+                    if (res != null && res.decompileCompleted())
+                        w.println(res.getDecompiledFunction().getC());
+                    else
+                        w.println("// (decompile failed for " + f.getName() + ")");
+                }
+            }
+        } finally {
+            w.close();
+        }
+    }
+}
 """
 
 
-def _extract_between(output: str, begin: str = _BEGIN, end: str = _END) -> str | None:
-    """analyzeHeadless の饒舌な出力から、スクリプトがマーカー間に吐いた本文だけを取り出す。
-    どちらかのマーカーが無ければ None(=スクリプトが正常に走らなかった)。"""
-    i = output.find(begin)
-    if i == -1:
-        return None
-    j = output.find(end, i + len(begin))
-    if j == -1:
-        return None
-    return output[i + len(begin) : j].strip()
-
-
-def _headless_command(binary: str, function: str, scriptdir: str, scriptname: str) -> str:
-    """analyzeHeadless の起動コマンドを組み立てる。使い捨てプロジェクトを一時領域に作り、
-    解析後に削除。解析時間は上限を付けて暴走を防ぐ。"""
+def _headless_command(binary: str, function: str, workdir: str, scriptname: str, outpath: str) -> str:
+    """analyzeHeadless の起動コマンドを組み立てる。プロジェクト格納先は workdir(既存)を使い、
+    解析後に -deleteProject で片付ける。解析時間には上限。stderr も拾う。"""
     b = shlex.quote(binary)
     fn = shlex.quote(function or "main")
-    sd = shlex.quote(scriptdir)
+    wd = shlex.quote(workdir)
+    op = shlex.quote(outpath)
     return (
-        f"{{ $HEADLESS }} {shlex.quote(scriptdir + '/proj')} sikun_tmp "
-        f"-import {b} -scriptPath {sd} -postScript {shlex.quote(scriptname)} {fn} "
+        f"{{ $HEADLESS }} {wd} {_PROJ_NAME} "
+        f"-import {b} -scriptPath {wd} -postScript {shlex.quote(scriptname)} {fn} {op} "
         f"-deleteProject -analysisTimeoutPerFile 180 2>&1"
     )
 
@@ -111,10 +117,10 @@ def _headless_command(binary: str, function: str, scriptdir: str, scriptname: st
 async def _resolve_headless(ctx: PluginContext) -> str | None:
     """analyzeHeadless の実体パスを解決する。見つからなければ None。"""
     checks = " || ".join(f"command -v {c} 2>/dev/null" for c in _HEADLESS_CANDIDATES)
-    # PATH/GHIDRA_HOME/定番パスを順に試し、無ければ /opt/ghidra* を glob
+    globs = "; ".join(f'ls {g} 2>/dev/null | head -1' for g in _GLOB_CANDIDATES)
     probe = (
         f'H=$({checks}); '
-        f'[ -z "$H" ] && H=$(ls {_GLOB_CANDIDATE} 2>/dev/null | head -1); '
+        f'[ -z "$H" ] && H=$({{ {globs}; }} | head -1); '
         f'[ -n "$H" ] && echo "$H" || echo none'
     )
     out = (await ctx.run(probe)).strip().splitlines()
@@ -123,10 +129,14 @@ async def _resolve_headless(ctx: PluginContext) -> str | None:
 
 
 async def _write_script(ctx: PluginContext) -> None:
-    """逆コンパイル用 Jython を、Ghidra が動くホスト(ctx.run 先)の一時領域に書き出す。"""
+    """逆コンパイル用 Java GhidraScript を、Ghidra が動くホスト(ctx.run 先)の作業領域に書き出し、
+    前回の残骸(出力ファイル・プロジェクト)を掃除する。"""
+    q = shlex.quote
     heredoc = (
-        f"mkdir -p {shlex.quote(_SCRIPT_DIR)} && "
-        f"cat > {shlex.quote(_SCRIPT_DIR + '/' + _SCRIPT_NAME)} << 'SIKUN_GHIDRA_EOF'\n"
+        f"mkdir -p {q(_WORK_DIR)} && "
+        f"rm -f {q(_OUT_FILE)} {q(_WORK_DIR + '/' + _PROJ_NAME + '.gpr')} && "
+        f"rm -rf {q(_WORK_DIR + '/' + _PROJ_NAME + '.rep')} && "
+        f"cat > {q(_WORK_DIR + '/' + _SCRIPT_NAME)} << 'SIKUN_GHIDRA_EOF'\n"
         f"{_DECOMPILE_SCRIPT}\n"
         "SIKUN_GHIDRA_EOF"
     )
@@ -139,7 +149,6 @@ async def _run_decompile(args: dict, ctx: PluginContext) -> dict:
         return {"error": "binary(解析するバイナリのパス)を指定してください"}
     function = str(args.get("function") or "main").strip() or "main"
 
-    # 対象ファイルの存在確認(ctx.run 先のホスト基準)
     exists = (await ctx.run(f"test -f {shlex.quote(binary)} && echo yes || echo no")).split()
     if "yes" not in exists:
         return {"error": f"ファイルが見つかりません: {binary}(Ghidra が動くホスト上のパスを指定)"}
@@ -154,13 +163,16 @@ async def _run_decompile(args: dict, ctx: PluginContext) -> dict:
         }
 
     await _write_script(ctx)
-    cmd = _headless_command(binary, function, _SCRIPT_DIR, _SCRIPT_NAME).replace(
+    cmd = _headless_command(binary, function, _WORK_DIR, _SCRIPT_NAME, _OUT_FILE).replace(
         "{ $HEADLESS }", shlex.quote(headless)
     )
     raw = await ctx.run(cmd)
 
-    body = _extract_between(raw)
-    if body is None:
+    # 出力ファイルを読む(スクリプトがここに擬似C or 関数一覧を書く)
+    body = await ctx.run(
+        f"[ -s {shlex.quote(_OUT_FILE)} ] && cat {shlex.quote(_OUT_FILE)} || echo __SIKUN_NO_OUTPUT__"
+    )
+    if "__SIKUN_NO_OUTPUT__" in body or not body.strip():
         tail = (raw or "").strip()[-800:]
         return {
             "error": "逆コンパイル出力を取得できませんでした(解析失敗/タイムアウト/Ghidraエラーの可能性)。",
@@ -174,7 +186,7 @@ async def _run_decompile(args: dict, ctx: PluginContext) -> dict:
         "function": function,
         "found": not not_found,
         # 擬似C(モデルがこれを読んで説明・脆弱性指摘する)。長すぎる場合は切る。
-        "decompiled": body[:12000],
+        "decompiled": body.strip()[:12000],
         "note": (
             "指定関数が見つからず、利用可能な関数名一覧を返した。function を指定して再度呼ぶこと。"
             if not_found
