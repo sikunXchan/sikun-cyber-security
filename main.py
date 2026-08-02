@@ -83,6 +83,11 @@ def main() -> None:
         help="起動時に自機のローカル体制点検(開放ポート/更新/失敗ログイン等)を実行して表示。対象ホスト不要",
     )
     parser.add_argument(
+        "--autostart",
+        action="store_true",
+        help="自動起動用: シネマティックな起動演出(推奨: 端末をフルスクリーンで)+ 体制点検。--status を含む",
+    )
+    parser.add_argument(
         "--logs",
         nargs="?",
         const="__list__",
@@ -116,8 +121,8 @@ def main() -> None:
             # brings to analyze or ask about. This is what lets SCS be opened
             # daily without the "need an authorized host first" friction.
             target = "(学習/解析モード)"
-        elif args.status:
-            # --status sweeps the local machine, no remote target needed.
+        elif args.status or args.autostart:
+            # --status / --autostart sweep the local machine, no remote target.
             target = "localhost"
         else:
             print_banner()
@@ -134,10 +139,11 @@ def main() -> None:
             ssh_host=args.ssh_host,
             initial_instruction=args.initial_instruction,
             profile=profile,
-            startup_status=args.status,
+            startup_status=args.status or args.autostart,
         ),
         profile_name=profile.name,
         start_mode=start_mode,
+        cinematic=args.autostart,
     )
     app.run()
 

@@ -131,9 +131,11 @@ class SikunApp(App):
         agent_factory: AgentFactory | None = None,
         profile_name: str = "default",
         start_mode: str = "security",
+        cinematic: bool = False,
     ) -> None:
         super().__init__()
         self.target = target
+        self.cinematic = cinematic  # --autostart: dramatic fullscreen-style intro
         self.agent_factory = agent_factory
         self.profile_name = profile_name
         self.events: asyncio.Queue[AgentEvent] = asyncio.Queue()
@@ -193,7 +195,10 @@ class SikunApp(App):
         self.query_one("#cmdline", Input).focus()
 
     async def _startup(self) -> None:
-        await self._boot_sequence()
+        if self.cinematic:
+            await self._cinematic_intro()
+        else:
+            await self._boot_sequence()
         self.run_worker(self._drain_events(), exclusive=False)
         if self.agent_factory is not None:
             self.run_worker(self.agent_factory(self), exclusive=False)
@@ -254,6 +259,47 @@ class SikunApp(App):
         )
         await asyncio.sleep(0.45)
         log.write(RichText.from_markup(rule))
+        log.write(banner_renderable())
+        log.write(RichText.from_markup(f"[dim #6a7a99]session log: {self._log_path}[/dim #6a7a99]\n"))
+        self._boot_done = True
+
+    async def _cinematic_intro(self) -> None:
+        """--autostart's dramatic opener: a cascade of glyphs, a glitched title
+        slam, a fast subsystem roll, then the mascot — the "jacking in" moment
+        before the morning sweep runs. Pure theatre; honest payoff is the sweep.
+        Framed as the operator coming online, not a real breach."""
+        import random
+
+        log = self.query_one("#transcript", RichLog)
+        width = min(getattr(self.size, "width", 80) or 80, 96)
+        glyphs = "01<>[]{}#$%&/\\|=+-*░▒▓01ｱｶｻﾀﾅ"
+
+        # 1) rushing data cascade — the "ばーーー" wall
+        for _ in range(16):
+            line = "".join(random.choice(glyphs) for _ in range(random.randint(int(width * 0.6), width)))
+            log.write(RichText.from_markup(f"[#0c5566]{line}[/#0c5566]"))
+            await asyncio.sleep(0.028)
+
+        # 2) glitched title slam (offset ghosts, then the clean line)
+        for dx, col in ((2, "#ff2bd6"), (-1, "#00f0ff")):
+            pad = " " * max(0, dx)
+            log.write(RichText.from_markup(f"[{col}]{pad}▛▀ S C S ▀▜  neural link[/{col}]"))
+            await asyncio.sleep(0.05)
+        log.write(RichText.from_markup("[bold #00f0ff]▛▀ S C S ▀▜[/bold #00f0ff] [bold #ff2bd6]NEURAL LINK ESTABLISHED[/bold #ff2bd6]"))
+        await asyncio.sleep(0.35)
+
+        # 3) fast subsystem online roll
+        for name in ("crypto-core", "scope-guard", "persistent-shell", "target-memory",
+                     "plugin-loader", "gemini-link", "sensor-grid"):
+            log.write(RichText.from_markup(
+                f"[#b26bff] ▸[/#b26bff] [#00f0ff]{name}[/#00f0ff] "
+                f"[dim #6a7a99]{'.' * (16 - len(name))}[/dim #6a7a99] [bold #39ff14]ONLINE[/bold #39ff14]"
+            ))
+            await asyncio.sleep(0.07)
+        await asyncio.sleep(0.25)
+
+        log.write(RichText.from_markup("[bold #39ff14]◈ OPERATOR ONLINE[/bold #39ff14] [dim #6a7a99]— jacking in ...[/dim #6a7a99]"))
+        await asyncio.sleep(0.3)
         log.write(banner_renderable())
         log.write(RichText.from_markup(f"[dim #6a7a99]session log: {self._log_path}[/dim #6a7a99]\n"))
         self._boot_done = True
