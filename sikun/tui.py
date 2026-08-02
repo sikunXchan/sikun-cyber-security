@@ -271,14 +271,40 @@ class SikunApp(App):
         import random
 
         log = self.query_one("#transcript", RichLog)
-        width = min(getattr(self.size, "width", 80) or 80, 96)
-        glyphs = "01<>[]{}#$%&/\\|=+-*░▒▓01ｱｶｻﾀﾅ"
+        width = min(getattr(self.size, "width", 80) or 80, 110)
 
-        # 1) rushing data cascade — the "ばーーー" wall
-        for _ in range(16):
-            line = "".join(random.choice(glyphs) for _ in range(random.randint(int(width * 0.6), width)))
-            log.write(RichText.from_markup(f"[#0c5566]{line}[/#0c5566]"))
-            await asyncio.sleep(0.028)
+        # 1) rushing data cascade — a big wall of meaningless (English) code-ish
+        # noise: hex, fake asm, symbols. Pure atmosphere.
+        _REGS = ("rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9",
+                 "r10", "r11", "eax", "ebx", "ecx", "edx")
+        _OPS = ("mov", "xor", "jmp", "call", "push", "pop", "lea", "add", "sub", "and",
+                "or", "test", "cmp", "shl", "shr", "ret", "nop", "int", "syscall", "inc", "dec")
+        _SYM = ("::", "//", ">>", "<<", "->", "==", "!=", "0x", "##", "&&", "||", "[]", "{}", "|")
+
+        def _tok() -> str:
+            r = random.random()
+            if r < 0.34:
+                return "%02x" % random.randint(0, 255)
+            if r < 0.55:
+                return "%s %s,%s" % (random.choice(_OPS), random.choice(_REGS), random.choice(_REGS))
+            if r < 0.72:
+                return "0x%06x" % random.randint(0, 0xFFFFFF)
+            if r < 0.86:
+                return random.choice(_OPS)
+            return random.choice(_SYM)
+
+        def _line(w: int) -> str:
+            parts, ln = [], 0
+            while ln < w:
+                t = _tok()
+                parts.append(t)
+                ln += len(t) + 1
+            return " ".join(parts)[:w]
+
+        for _ in range(30):
+            col = "#0c5566" if random.random() > 0.12 else "#7a1e5a"  # dim cyan, magenta flecks
+            log.write(RichText.from_markup(f"[{col}]{_line(width)}[/{col}]"))
+            await asyncio.sleep(0.022)
 
         # 2) glitched title slam (offset ghosts, then the clean line)
         for dx, col in ((2, "#ff2bd6"), (-1, "#00f0ff")):
