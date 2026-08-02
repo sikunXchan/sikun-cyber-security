@@ -190,7 +190,7 @@ class SikunApp(App):
         if self.agent_factory is not None:
             self.run_worker(self.agent_factory(self), exclusive=False)
 
-    async def _type(self, text: str, style: str, commit: str | None = None, cps: float = 0.008) -> None:
+    async def _type(self, text: str, style: str, commit: str | None = None, cps: float = 0.022) -> None:
         """Typewriter: reveal `text` char-by-char in the bottom boot line, then
         commit a (possibly richer-markup) finished line into the transcript.
         RichLog can't edit a line in place, so the live typing happens in a
@@ -218,29 +218,33 @@ class SikunApp(App):
         rule = "[#123]" + "▚" * 60 + "[/#123]"
 
         log.write(RichText.from_markup(rule))
+        await asyncio.sleep(0.35)
         await self._type(
             "◈ SIKUN CYBER SECURITY // offensive core",
             "bold #00f0ff",
             commit="[bold #00f0ff]◈ SIKUN CYBER SECURITY[/bold #00f0ff] [dim #6a7a99]// offensive core[/dim #6a7a99]",
         )
+        await asyncio.sleep(0.25)
         await self._type("initializing neural-offensive subsystem", "dim #7fa8bf",
                          commit="[#7fa8bf]  initializing neural-offensive subsystem ...[/#7fa8bf] [bold #39ff14][OK][/bold #39ff14]")
+        await asyncio.sleep(0.3)
 
         # module roll — real plugin/subsystem names so it reads as genuine
         for name in ("scope-guard", "persistent-shell", "target-memory", "plugin-loader", "gemini-link"):
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.22)
             log.write(RichText.from_markup(
                 f"[#b26bff]  ▸[/#b26bff] mount [#00f0ff]{name}[/#00f0ff] "
                 f"[dim #6a7a99]{'.' * (18 - len(name))}[/dim #6a7a99] [bold #39ff14][OK][/bold #39ff14]"
             ))
-        await asyncio.sleep(0.08)
+        await asyncio.sleep(0.4)
 
         await self._type(
             f"target locked: {self.target}",
             "bold #ff3bd6",
             commit=f"[bold #ff3bd6]⌖ target locked:[/bold #ff3bd6] [#ff9be8]{self.target}[/#ff9be8]",
-            cps=0.012,
+            cps=0.04,
         )
+        await asyncio.sleep(0.45)
         log.write(RichText.from_markup(rule))
         log.write(banner_renderable())
         log.write(RichText.from_markup(f"[dim #6a7a99]session log: {self._log_path}[/dim #6a7a99]\n"))
