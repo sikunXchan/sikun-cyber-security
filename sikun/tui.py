@@ -145,6 +145,11 @@ class SikunApp(App):
             "model": "",
             "cost": 0.0,
             "phase": "-",
+            "cwd": "",           # live shell cwd (from PersistentShell.cwd_live)
+            "last_cmd": "",      # last bash command run
+            "turns": 0,          # model turns this session
+            "tools": 0,          # tool calls this session
+            "cost_history": [],  # per-turn cost, for the sparkline
             "ports": [],
             "findings": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0},
         }
@@ -339,6 +344,11 @@ class SikunApp(App):
         ports = kwargs.pop("ports", None)
         if ports:
             self._merge_ports(ports)
+        turn_cost = kwargs.pop("turn_cost", None)
+        if turn_cost is not None:
+            hist = self.board["cost_history"]
+            hist.append(float(turn_cost))
+            del hist[:-40]  # keep the last 40 for the sparkline
         self.board.update(kwargs)
         self._refresh_sidebar()
 
@@ -350,34 +360,71 @@ class SikunApp(App):
                 self.board["ports"].append(p)
                 seen.add(key)
 
+    _SPARK = "▁▂▃▄▅▆▇█"
+
+    @staticmethod
+    def _clip(s: str, n: int) -> str:
+        s = (s or "").replace("\n", " ")
+        return s if len(s) <= n else "…" + s[-(n - 1):]
+
+    def _sparkline(self, vals: list, width: int = 28) -> str:
+        vals = vals[-width:]
+        if not vals:
+            return "[dim #6a7a99]—[/dim #6a7a99]"
+        lo, hi = min(vals), max(vals)
+        spark = "".join(
+            self._SPARK[0] if hi <= lo else self._SPARK[int((v - lo) / (hi - lo) * (len(self._SPARK) - 1))]
+            for v in vals
+        )
+        return f"[#b26bff]{spark}[/#b26bff]"
+
     def _board_renderable(self) -> RichText:
-        rule = "[#1a2a44]" + "▚" * 16 + "[/#1a2a44]"
-        lines: list[str] = ["[bold #ff2bd6]▓ SITREP[/bold #ff2bd6]", rule]
-        lines.append(f"[dim #6a7a99]phase[/dim #6a7a99] [#b26bff]{self.board.get('phase', '-')}[/#b26bff]")
-        lines.append("")
+        b = self.board
+        rule = "[#1a2a44]" + "─" * 30 + "[/#1a2a44]"
+        L: list[str] = ["[bold #ff2bd6]▓ SITREP[/bold #ff2bd6]", rule]
 
-        ports = self.board.get("ports", [])
-        lines.append(f"[bold #00f0ff]▸ PORTS[/bold #00f0ff] [dim #6a7a99]({len(ports)})[/dim #6a7a99]")
+        # SESSION
+        L.append("[dim #6a7a99]phase[/dim #6a7a99] [#b26bff]" + str(b.get("phase", "-")) + "[/#b26bff]"
+                 + f"   [dim #6a7a99]turns[/dim #6a7a99] [#c7f5ff]{b.get('turns', 0)}[/#c7f5ff]"
+                 + f"  [dim #6a7a99]tools[/dim #6a7a99] [#c7f5ff]{b.get('tools', 0)}[/#c7f5ff]")
+        L.append("")
+
+        # SHELL
+        L.append("[bold #00f0ff]▸ SHELL[/bold #00f0ff]")
+        L.append(f" [dim #6a7a99]cwd[/dim #6a7a99] [#7fe0a0]{self._clip(b.get('cwd', '') or '~', 26)}[/#7fe0a0]")
+        last = b.get("last_cmd", "")
+        L.append(f" [#39ff14]$[/#39ff14] [#c7f5ff]{self._clip(last, 26) if last else '[dim #6a7a99](idle)[/dim #6a7a99]'}[/#c7f5ff]")
+        L.append("")
+
+        # COST + sparkline
+        L.append(f"[bold #ffb000]◆ COST[/bold #ffb000] [#39ff14]${b.get('cost', 0.0):.4f}[/#39ff14]")
+        L.append(" " + self._sparkline(b.get("cost_history", [])))
+        L.append("")
+
+        # PORTS
+        ports = b.get("ports", [])
+        L.append(f"[bold #00f0ff]▸ PORTS[/bold #00f0ff] [dim #6a7a99]({len(ports)})[/dim #6a7a99]")
         if ports:
-            for p in ports[:8]:
-                lines.append(f" [#39ff14]{p.get('port')}/{p.get('protocol', '')}[/#39ff14] [#c7f5ff]{p.get('service', '?')}[/#c7f5ff]")
-            if len(ports) > 8:
-                lines.append(f" [dim #6a7a99]...(+{len(ports) - 8})[/dim #6a7a99]")
+            for p in ports[:6]:
+                L.append(f" [#39ff14]{p.get('port')}/{p.get('protocol', '')}[/#39ff14] [#c7f5ff]{p.get('service', '?')}[/#c7f5ff]")
+            if len(ports) > 6:
+                L.append(f" [dim #6a7a99]...(+{len(ports) - 6})[/dim #6a7a99]")
         else:
-            lines.append(" [dim #6a7a99](none)[/dim #6a7a99]")
-        lines.append("")
+            L.append(" [dim #6a7a99](none)[/dim #6a7a99]")
+        L.append("")
 
-        findings = self.board.get("findings", {})
+        # FINDINGS
+        findings = b.get("findings", {})
         total_f = sum(findings.values())
-        lines.append(f"[bold #ff3bd6]✖ FINDINGS[/bold #ff3bd6] [dim #6a7a99]({total_f})[/dim #6a7a99]")
+        L.append(f"[bold #ff3bd6]✖ FINDINGS[/bold #ff3bd6] [dim #6a7a99]({total_f})[/dim #6a7a99]")
         if total_f:
             for sev in _BOARD_SEV_ORDER:
                 n = findings.get(sev, 0)
                 if n:
-                    lines.append(f" [{_BOARD_SEV_COLOR[sev]}]{sev}[/{_BOARD_SEV_COLOR[sev]}] {n}")
+                    L.append(f" [{_BOARD_SEV_COLOR[sev]}]{sev}[/{_BOARD_SEV_COLOR[sev]}] {n}")
         else:
-            lines.append(" [dim #6a7a99](none yet)[/dim #6a7a99]")
-        return RichText.from_markup("\n".join(lines))
+            L.append(" [dim #6a7a99](none yet)[/dim #6a7a99]")
+        return RichText.from_markup("\n".join(L))
 
     def _refresh_sidebar(self) -> None:
         try:

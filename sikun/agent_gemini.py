@@ -635,6 +635,8 @@ async def _run_loop(
     # one-per-segment breadth audit for this segment.
     did_work_since_instruction = False
     coverage_audit_done = False
+    turn_count = 0   # HUD: model turns this session
+    tool_count = 0   # HUD: tool calls this session
 
     while True:
         # No instruction yet (bare `target` with no --task) -> do nothing and
@@ -745,7 +747,8 @@ async def _run_loop(
 
         turn_cost = _estimate_cost(response.usage_metadata, turn_model)
         total_cost += turn_cost
-        _notify_board(app, cost=total_cost)
+        turn_count += 1
+        _notify_board(app, cost=total_cost, turn_cost=turn_cost, turns=turn_count)
         um = response.usage_metadata
         await app.post_event(
             "system",
@@ -779,6 +782,8 @@ async def _run_loop(
             elif part.function_call:
                 fc = part.function_call
                 _activity(app, f"exec {fc.name}")
+                tool_count += 1
+                _notify_board(app, tools=tool_count)
                 if fc.name == "bash":
                     command = (fc.args or {}).get("command", "")
                     if not command:
@@ -798,6 +803,7 @@ async def _run_loop(
                         continue
                     await app.post_event("system", render_tool_call(f"Bash({command})"))
                     output = await shell.run(command)
+                    _notify_board(app, last_cmd=command, cwd=getattr(shell, "cwd_live", ""))
                     await app.post_event("system", render_tool_result(preview_for_ui(output)))
                     function_response_parts.append(
                         types.Part.from_function_response(name=fc.name, response={"output": output})

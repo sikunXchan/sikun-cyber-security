@@ -84,6 +84,9 @@ class PersistentShell:
     def __init__(self, ssh_host: str | None = None, cwd: Path | None = None) -> None:
         self.ssh_host = ssh_host
         self.cwd = cwd or Path.home()
+        # Live working directory of the persistent session (updated from each
+        # command's completion marker, which carries $PWD). Used by the HUD.
+        self.cwd_live = str(self.cwd)
         self._proc: asyncio.subprocess.Process | None = None
 
     async def start(self) -> None:
@@ -114,7 +117,9 @@ class PersistentShell:
 
         marker = f"__SIKUN_DONE_{uuid.uuid4().hex}__"
         assert self._proc.stdin is not None and self._proc.stdout is not None
-        self._proc.stdin.write(f"{command}\necho {marker}:$?\n".encode())
+        # marker carries exit code AND the live cwd ($PWD) so the HUD can show
+        # where the shell is, at zero extra cost (no separate pwd call).
+        self._proc.stdin.write(f"{command}\necho {marker}:$?:$PWD\n".encode())
         await self._proc.stdin.drain()
 
         lines: list[str] = []
@@ -136,7 +141,12 @@ class PersistentShell:
                     before, _, after = text.partition(marker)
                     if before:
                         lines.append(before)
-                    exit_code = after.strip().split(":", 1)[-1] or "?"
+                    # after looks like ":<exit>:<pwd>" (pwd absent on old shells)
+                    parts = after.strip().split(":", 2)
+                    if len(parts) >= 2 and parts[1]:
+                        exit_code = parts[1]
+                    if len(parts) >= 3 and parts[2]:
+                        self.cwd_live = parts[2]
                     break
                 lines.append(text)
         except asyncio.TimeoutError:
