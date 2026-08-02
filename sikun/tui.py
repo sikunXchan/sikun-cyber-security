@@ -157,6 +157,9 @@ class SikunApp(App):
         self._interrupt_event = asyncio.Event()
         self._blink = False  # drives the blinking "live" glyph in the status bar
         self._boot_done = False
+        self._frame = 0          # animation frame counter (spinner / blink)
+        self._activity = ""      # non-empty while the agent is working -> status spinner
+        self._last_sec = -1      # throttle idle status repaints to ~1/s (IME-friendly)
 
         LOG_DIR.mkdir(exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -177,7 +180,7 @@ class SikunApp(App):
 
     def on_mount(self) -> None:
         self._refresh_sidebar()
-        self.set_interval(0.5, self._tick_clock)  # also drives the blinking scan glyph
+        self.set_interval(0.12, self._tick)  # spins the activity indicator; throttled at idle
         # Boot animation first, then wire up the live event drain + agent. Keeping
         # them behind the boot worker means the cinematic sequence isn't racing
         # the agent's first "指示待ち" line into the transcript.
@@ -278,26 +281,56 @@ class SikunApp(App):
             pass
         raise Interrupted()
 
+    _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
     def _status_text(self) -> str:
         elapsed = int(time.monotonic() - self._start_time)
         mm, ss = divmod(elapsed, 60)
         mode = self.session_state.get("mode", "security")
         model = self.board.get("model") or "-"
         cost = self.board.get("cost", 0.0)
-        dot = "[#39ff14]◉[/#39ff14]" if self._blink else "[#124a12]◉[/#124a12]"
         sep = "[#2b3a5a]│[/#2b3a5a]"
+        if self._activity:
+            spin = self._SPINNER[self._frame % len(self._SPINNER)]
+            lead = f"[bold #ff2bd6]{spin}[/bold #ff2bd6]"
+            tail = f" {sep} [#ffb000]▸ {self._activity}[/#ffb000]"
+        else:
+            lead = "[#39ff14]◉[/#39ff14]" if self._blink else "[#124a12]◉[/#124a12]"
+            tail = ""
         return (
-            f"{dot} [bold #00f0ff]SIKUN//CSEC[/bold #00f0ff] {sep} "
+            f"{lead} [bold #00f0ff]SIKUN//CSEC[/bold #00f0ff] {sep} "
             f"[dim #6a7a99]tgt[/dim #6a7a99] [#ff3bd6]{self.target}[/#ff3bd6] {sep} "
-            f"[dim #6a7a99]prof[/dim #6a7a99] [#c7f5ff]{self.profile_name}[/#c7f5ff] {sep} "
             f"[dim #6a7a99]mode[/dim #6a7a99] [#b26bff]{mode}[/#b26bff] {sep} "
             f"[dim #6a7a99]model[/dim #6a7a99] [#c7f5ff]{model}[/#c7f5ff] {sep} "
-            f"[#39ff14]${cost:.4f}[/#39ff14] {sep} [#00f0ff]{mm:02d}:{ss:02d}[/#00f0ff]"
+            f"[#39ff14]${cost:.4f}[/#39ff14] {sep} [#00f0ff]{mm:02d}:{ss:02d}[/#00f0ff]{tail}"
         )
 
-    def _tick_clock(self) -> None:
-        self._blink = not self._blink
-        self.query_one("#status-bar", Static).update(self._status_text())
+    def _tick(self) -> None:
+        """Fast animation tick. While the agent is working, repaint every frame
+        so the spinner spins; at idle, only repaint when the shown second flips
+        (keeps idle repaints ~1/s, which a CJK IME composition tolerates)."""
+        self._frame += 1
+        sec = int(time.monotonic() - self._start_time)
+        if self._activity or sec != self._last_sec:
+            self._last_sec = sec
+            self._blink = (self._frame // 4) % 2 == 0
+            self._refresh_status()
+
+    def _refresh_status(self) -> None:
+        try:
+            self.query_one("#status-bar", Static).update(self._status_text())
+        except Exception:
+            pass
+
+    def set_activity(self, label: str) -> None:
+        """Called by the agent loop to show a live spinner + label in the status
+        bar while a model call or tool is running."""
+        self._activity = label
+        self._refresh_status()
+
+    def clear_activity(self) -> None:
+        self._activity = ""
+        self._refresh_status()
 
     def update_board(self, **kwargs: Any) -> None:
         """Called by the agent backends (same asyncio loop) to push structured
@@ -357,7 +390,9 @@ class SikunApp(App):
         transcript = self.query_one("#transcript", RichLog)
         while True:
             event = await self.events.get()
-            transcript.write(event.render())
+            # dim timestamp gutter on every line -> operator-log feel
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            transcript.write(f"[#33425c]{ts}[/#33425c] {event.render()}")
 
     async def post_event(self, channel: str, text: str, severity: str | None = None) -> None:
         """Call from the agent loop (same asyncio loop) to push a line into the

@@ -335,6 +335,14 @@ def _notify_board(app, **kwargs) -> None:
         updater(**kwargs)
 
 
+def _activity(app, label: str) -> None:
+    """Drive the TUI's status-bar activity spinner (set with a label, or clear
+    with ''). Guarded so a headless/test app without one still runs."""
+    fn = getattr(app, "set_activity" if label else "clear_activity", None)
+    if callable(fn):
+        fn(label) if label else fn()
+
+
 def _compact_old_context(contents: list[types.Content], keep_recent: int = CONTEXT_KEEP_RECENT) -> None:
     """Once a run runs long, old raw tool output is dead weight: it costs
     tokens every subsequent turn and competes for the model's attention
@@ -633,6 +641,7 @@ async def _run_loop(
         # wait. Never synthesize a "start recon" turn on our own; the operator
         # types the first instruction, always.
         if not contents:
+            _activity(app, "")
             await app.post_event("system", "[dim]指示待ち — 下の入力欄から指示を入力してください[/dim]")
             instruction = await app.wait_for_instruction()
             contents.append(types.Content(role="user", parts=[types.Part(text=instruction)]))
@@ -691,6 +700,7 @@ async def _run_loop(
         interrupted = False
         for attempt in range(2):
             try:
+                _activity(app, f"querying {turn_model}")
                 response = await _call_model(app, client, contents, turn_config, turn_model)
             except Interrupted:
                 await app.post_event("system", "[bold yellow]⏹ 中断しました(Esc)[/bold yellow]")
@@ -768,6 +778,7 @@ async def _run_loop(
                 await app.post_event("system", part.text)
             elif part.function_call:
                 fc = part.function_call
+                _activity(app, f"exec {fc.name}")
                 if fc.name == "bash":
                     command = (fc.args or {}).get("command", "")
                     if not command:
@@ -1025,6 +1036,7 @@ async def _run_loop(
 
         # No tool calls this turn — the agent is concluding/waiting, not stuck.
         unproductive_streak = 0
+        _activity(app, "")
         # Coverage gate: if it did attack work this segment and is now trying to
         # wrap up, force one breadth audit before accepting the conclusion — so
         # an early "diagnosis complete" doesn't leave enumerated high-value
