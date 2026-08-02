@@ -78,6 +78,11 @@ def main() -> None:
         help="学習・解析モードで起動(攻撃せず、CVE/手法の学習や成果物の防御的解析に使う)。対象ホスト不要",
     )
     parser.add_argument(
+        "--status",
+        action="store_true",
+        help="起動時に自機のローカル体制点検(開放ポート/更新/失敗ログイン等)を実行して表示。対象ホスト不要",
+    )
+    parser.add_argument(
         "--logs",
         nargs="?",
         const="__list__",
@@ -111,6 +116,9 @@ def main() -> None:
             # brings to analyze or ask about. This is what lets SCS be opened
             # daily without the "need an authorized host first" friction.
             target = "(学習/解析モード)"
+        elif args.status:
+            # --status sweeps the local machine, no remote target needed.
+            target = "localhost"
         else:
             print_banner()
             target = input("\n対象ホスト(認可された対象のみ): ").strip()
@@ -126,6 +134,7 @@ def main() -> None:
             ssh_host=args.ssh_host,
             initial_instruction=args.initial_instruction,
             profile=profile,
+            startup_status=args.status,
         ),
         profile_name=profile.name,
         start_mode=start_mode,

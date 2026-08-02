@@ -497,6 +497,32 @@ def test_study_mode_selects_learning_prompt_and_forbids_attacks():
     assert ag._build_config("x", "banana").system_instruction == general
 
 
+def test_selfcheck_parsers_classify_status():
+    # The --status sweep's parsers must turn raw command output into a
+    # (status, detail) verdict — and never raise on odd/empty input (a startup
+    # screen that crashes is worse than one that says "SKIP").
+    from sikun import selfcheck as sc
+
+    # strips the persistent shell's [exit=N] prefix
+    assert sc._clean("[exit=0]\n22 80 443") == "22 80 443"
+
+    assert sc._p_ports("[exit=0]\n22 80 443")[0] == "INFO"
+    assert sc._p_firewall("Status: active")[0] == "OK"
+    assert sc._p_firewall("Status: inactive")[0] == "WARN"
+    assert sc._p_firewall("__NOUFW__")[0] == "INFO"
+    assert sc._p_failed_logins("0")[0] == "OK"
+    assert sc._p_failed_logins("42")[0] == "WARN"      # many failures -> flag
+    assert sc._p_failed_logins("na")[0] == "SKIP"
+    assert sc._p_disk_load("2% 0.00")[0] == "OK"
+    assert sc._p_disk_load("95% 3.2")[0] == "WARN"     # nearly full -> flag
+    assert sc._p_updates("0 0")[0] == "OK"
+    assert sc._p_updates("8 3")[0] == "WARN"           # security updates pending -> flag
+    # none of the parsers raise on empty/garbage
+    for fn in (sc._p_ports, sc._p_firewall, sc._p_failed_logins, sc._p_disk_load,
+               sc._p_updates, sc._p_suid, sc._p_docker, sc._p_sessions):
+        assert isinstance(fn(""), tuple) and len(fn("")) == 2
+
+
 def test_coverage_gate_fires_once_after_work_in_security_mode():
     # The coverage gate forces one breadth audit before the agent may conclude,
     # but only when it actually did attack work this segment, only in security

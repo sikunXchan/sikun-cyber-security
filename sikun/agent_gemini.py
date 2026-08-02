@@ -478,6 +478,7 @@ async def run_agent(
     initial_instruction: str | None = None,
     ssh_host: str | None = None,
     profile: Profile | None = None,
+    startup_status: bool = False,
 ) -> None:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -537,6 +538,12 @@ async def run_agent(
     shell = PersistentShell(ssh_host=ssh_host, cwd=workdir)
     await shell.start()
     await app.post_event("system", f"[dim]永続シェル起動(ssh_host={ssh_host or 'ローカル'})[/dim]")
+
+    # --status: run the local posture sweep before handing off to interactive.
+    if startup_status:
+        from sikun.selfcheck import run_selfcheck
+
+        await run_selfcheck(shell.run, app.post_event)
 
     # Per-target memory: recall prior ports/findings across sessions, and keep
     # this session's findings salient regardless of context compaction.
