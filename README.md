@@ -97,6 +97,10 @@ PLUGIN = ToolPlugin(
 - **`ghidra_decompile`** — Ghidra のヘッドレス解析で、ソースの無いバイナリ(.exe/ELF/マルウェア/
   CTFのrev/ファームウェア)を逆コンパイルし擬似Cを返す。**「Ghidraを読めない」人の代わりに AI が
   読んで説明・脆弱性指摘する**のが狙い。GUI不使用。ソースがあるものには使わない。要 Ghidra(GHIDRA_HOME)
+- **`mobsf_scan` / `mobsf_scans`** — MobSF(Mobile Security Framework)にモバイルアプリ
+  (APK/IPA/APPX)をアップロードして静的解析し、権限・危険な権限・コード解析findings・証明書の
+  問題・トラッカー・セキュリティスコア(0-100)を要約して返す。ソースの無いモバイルアプリ解析用。
+  要 MobSF サーバー起動(`MOBSF_URL`)+ `MOBSF_API_KEY`
 - **`remediate`** — 実証した finding の**修復アドバイス**(根本原因・具体的な修正手順・優先度・
   CWE/OWASP参照)を生成して `remediations/` に保存(ブルー/防御側)。攻撃を「見つけた」で
   終わらせず、開発者がそのまま直せる形にする。優先度は severity から自動決定

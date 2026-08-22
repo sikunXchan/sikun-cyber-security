@@ -479,6 +479,105 @@ def test_metasploit_plugin_parses_scopes_and_degrades_cleanly():
     assert "error" in asyncio.run(by["msf_run"].run({"module": "x"}, ctx))
 
 
+def test_mobsf_plugin_digests_report_and_degrades_cleanly():
+    # The MobSF plugin must: build correct curl commands, reduce a (potentially
+    # huge) report JSON down to a compact digest via the embedded python3
+    # script (verified by actually running it — this is the one part unit
+    # tests can fully exercise without a live MobSF server), keep both tools
+    # scope-free (MobSF runs on the operator's own box, not the target), and
+    # return a clean error (never crash) when the API key/server/file are missing.
+    import json
+    import os
+    import subprocess
+    import sys
+    import tempfile
+
+    from sikun.plugins import _import_file
+
+    mod = _import_file(PROJECT_ROOT / "plugins" / "mobsf.py")
+
+    by = {p.name: p for p in mod.PLUGINS}
+    assert by["mobsf_scan"].scope_targets({"file_path": "/tmp/a.apk"}) == []
+    assert by["mobsf_scans"].scope_targets({}) == []
+
+    assert mod._extract_json('[exit=0]\nnoise {"a": 1, "b": {"c": 2}} tail') == '{"a": 1, "b": {"c": 2}}'
+    assert mod._extract_json("no json here") == ""
+
+    # --- the digest script itself: run it for real against a realistic fixture ---
+    fake_report = {
+        "app_name": "VulnBank",
+        "package_name": "com.example.vulnbank",
+        "permissions": {
+            "android.permission.CAMERA": {"status": "dangerous"},
+            "android.permission.INTERNET": {"status": "normal"},
+        },
+        "code_analysis": {
+            "findings": {"r1": {"metadata": {"severity": "high", "description": "Insecure Random used"}}},
+            "summary": {"high": 1, "warning": 2, "info": 4, "secure": 6},
+            "urls": ["https://api.example.com"],
+        },
+        "certificate_analysis": {"certificate_findings": [["high", "d", "Debug certificate used"]]},
+        "trackers": {"detected_trackers": 1, "trackers": ["Firebase"]},
+        "exported_activities": ["MainActivity"],
+    }
+    with tempfile.TemporaryDirectory() as td:
+        script_path = os.path.join(td, "digest.py")
+        report_path = os.path.join(td, "report.json")
+        with open(script_path, "w") as f:
+            f.write(mod._DIGEST_PY)
+        with open(report_path, "w") as f:
+            json.dump(fake_report, f)
+
+        r = subprocess.run([sys.executable, script_path, report_path, "23"], capture_output=True, text=True)
+        assert r.returncode == 0
+        digest = json.loads(r.stdout)
+        assert digest["app_name"] == "VulnBank"
+        assert digest["security_score"] == 23
+        assert digest["risk"] == "critical"  # <30 band
+        assert digest["dangerous_permissions"] == ["android.permission.CAMERA"]
+        assert digest["code_findings"] == {"high": 1, "warning": 2, "info": 4, "secure": 6}
+        assert digest["top_high_severity_findings"] == ["Insecure Random used"]
+        assert digest["certificate_issues"] == ["Debug certificate used"]
+
+        # server-side error passthrough
+        with open(report_path, "w") as f:
+            json.dump({"error": "Invalid scan hash"}, f)
+        r = subprocess.run([sys.executable, script_path, report_path, "none"], capture_output=True, text=True)
+        assert r.returncode == 0
+        assert json.loads(r.stdout) == {"error": "Invalid scan hash"}
+
+        # malformed/truncated JSON never crashes the script
+        with open(report_path, "w") as f:
+            f.write('{"app_name": "X", "trunc')
+        r = subprocess.run([sys.executable, script_path, report_path, "none"], capture_output=True, text=True)
+        assert r.returncode == 0
+        assert "error" in json.loads(r.stdout)
+
+    # --- plugin-level degradation: missing arg / no key / unreachable server ---
+    async def noop(cmd: str) -> str:
+        return ""
+
+    ctx = PluginContext(target="x", ssh_host=None, workdir=Path.home(), run=noop)
+    out = asyncio.run(by["mobsf_scan"].run({}, ctx))
+    assert "error" in out and "file_path" in out["error"]
+
+    os.environ.pop("MOBSF_API_KEY", None)
+    out = asyncio.run(by["mobsf_scan"].run({"file_path": "/tmp/a.apk"}, ctx))
+    assert "error" in out and "MOBSF_API_KEY" in out["error"]
+
+    os.environ["MOBSF_API_KEY"] = "testkey"
+    try:
+
+        async def unreachable(cmd: str) -> str:
+            return "000" if "http_code" in cmd else ""
+
+        ctx2 = PluginContext(target="x", ssh_host=None, workdir=Path.home(), run=unreachable)
+        out = asyncio.run(by["mobsf_scan"].run({"file_path": "/tmp/a.apk"}, ctx2))
+        assert "error" in out and "接続できません" in out["error"]
+    finally:
+        os.environ.pop("MOBSF_API_KEY", None)
+
+
 def test_study_mode_selects_learning_prompt_and_forbids_attacks():
     # /mode study (the daily-driver) must pick the study template — learning +
     # defensive analysis, explicitly no remote attacks and no executing
