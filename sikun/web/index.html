@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Sikun Cyber Security</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div id="titlebar">
+    <span class="dot"></span>
+    <span class="brand">SIKUN // CSEC</span>
+    <span class="sep">|</span>
+    <span>対象 <b id="tb-target">-</b></span>
+    <span class="sep">|</span>
+    <span>モード <b id="tb-mode">security</b></span>
+    <span class="sep">|</span>
+    <span>モデル <b id="tb-model">-</b></span>
+    <span class="sep">|</span>
+    <span id="tb-cost">$0.0000</span>
+    <span class="spacer"></span>
+    <span id="tb-activity"></span>
+  </div>
+
+  <div id="sidebar">
+    <div class="logo">
+      <img src="../assets/mascot.png" alt="sikun">
+      <div>
+        <div class="name">sikun-cybersecurity</div>
+        <div class="tag">for a safer (or not) world.</div>
+      </div>
+    </div>
+    <div class="nav-item active" data-view="dashboard"><span class="glyph">&gt;_</span> Dashboard</div>
+    <div class="nav-item" data-view="reports"><span class="glyph">&#128196;</span> Reports</div>
+    <div class="nav-item" data-view="settings"><span class="glyph">&#9881;</span> Settings</div>
+    <div class="footer">
+      "knowledge is the sharpest exploit."<br>
+      &mdash; sikun
+    </div>
+  </div>
+
+  <div id="content">
+
+    <!-- Dashboard -->
+    <div class="view active" id="view-dashboard">
+      <div id="dashboard-main" class="panel">
+        <div class="panel-header">&#9001;&#9002; Terminal</div>
+        <div id="terminal"></div>
+        <div id="choice-bar"></div>
+        <div id="input-row">
+          <input id="cmdline" type="text" placeholder="指示を入力して Enter (/mode, /effort, /plan, /model)" autofocus>
+          <button id="stop-btn" title="実行中のターンを中断">■ 中断</button>
+        </div>
+      </div>
+
+      <div id="dashboard-side">
+        <div class="panel">
+          <div class="panel-header">Target Information</div>
+          <div class="stat-row"><span class="k">Target</span><span class="v" id="side-target">-</span></div>
+          <div class="stat-row"><span class="k">Mode</span><span class="v" id="side-mode">security</span></div>
+          <div class="stat-row"><span class="k">Phase</span><span class="v" id="side-phase">-</span></div>
+          <div class="stat-row"><span class="k">Shell cwd</span><span class="v" id="side-cwd">~</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">Live Activity</div>
+          <div class="stat-row"><span class="k">Turns</span><span class="v" id="side-turns">0</span></div>
+          <div class="stat-row"><span class="k">Tool calls</span><span class="v" id="side-tools">0</span></div>
+          <div class="stat-row"><span class="k">Last cmd</span><span class="v" id="side-lastcmd">(idle)</span></div>
+          <div class="stat-row"><span class="k">Cost</span><span class="v" id="side-cost">$0.0000</span></div>
+          <div class="sparkline"><svg id="cost-spark" viewBox="0 0 280 32" preserveAspectRatio="none"></svg></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">Ports <span class="count" id="port-count">(0)</span></div>
+          <div class="port-list" id="port-list"><div class="empty">未検出</div></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">Findings <span class="count" id="finding-count">(0)</span></div>
+          <div class="finding-list" id="finding-list"><div class="empty">未検出</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reports -->
+    <div class="view" id="view-reports">
+      <div class="panel" id="report-list">
+        <div class="panel-header">Reports</div>
+        <div id="report-items"><div class="empty">remediations/ と detections/ にファイルがありません</div></div>
+      </div>
+      <div class="panel" style="flex:1;">
+        <div class="panel-header" id="report-view-title">レポートを選択してください</div>
+        <div id="report-view"></div>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="view" id="view-settings">
+      <div class="panel" id="profile-list">
+        <div class="panel-header">Profiles</div>
+        <div id="profile-items"><div class="empty">profiles/*.toml が見つかりません</div></div>
+      </div>
+      <div class="panel" id="settings-editor">
+        <div class="panel-header">
+          <span id="settings-title">プロファイルを選択してください</span>
+          <span>
+            <span id="profile-status"></span>
+            <button id="save-profile-btn" style="display:none;">保存</button>
+          </span>
+        </div>
+        <textarea id="profile-textarea" placeholder="左のリストからプロファイルを選んでください" disabled></textarea>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

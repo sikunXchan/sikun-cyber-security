@@ -4,5 +4,8 @@ Pillow>=10.0.0
 python-dotenv>=1.0.0
 numpy>=1.26.0
 google-genai>=1.0.0
+# ネイティブデスクトップUI(gui.py)用。OS側のWebViewランタイムを使う
+# (Linux は WebKitGTK か QtWebEngine が別途必要: 例 apt install python3-gi gir1.2-webkit2-4.1)
+pywebview>=5.0
 # metasploit プラグイン用(RPC連携)。Metasploit本体(metasploit-framework)は別途OS側で導入する
 pymetasploit3>=1.0.0

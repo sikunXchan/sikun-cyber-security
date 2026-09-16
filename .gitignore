@@ -23,6 +23,9 @@ remediations/
 # ターゲット別の永続メモリ(発見内容=各自の環境情報。共有しない)
 memory/
 
+# gui.py が起動時に sikun/assets/ から自動同期するコピー(sikun/webapp.py 参照)
+sikun/web/assets/
+
 # OS
 .DS_Store
 
