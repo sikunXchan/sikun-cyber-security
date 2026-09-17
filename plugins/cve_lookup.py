@@ -21,7 +21,7 @@ import shlex
 from sikun.plugins import PluginContext, ToolPlugin
 
 _NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-_CVE_RE = re.compile(r"CVE-\d{4}-\d{3,7}")
+_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}")
 
 
 def _extract_json(raw: str) -> str:
@@ -52,6 +52,8 @@ def _parse_searchsploit_json(raw: str, max_results: int) -> list[dict]:
                 "id": item.get("EDB-ID") or "",
                 "title": (item.get("Title") or "").strip(),
                 "path": item.get("Path") or "",
+                "verification": "unverified",
+                "match_basis": "keyword_search",
             }
         )
     return out
@@ -65,24 +67,35 @@ def _nvd_id_command(query: str, n: int) -> str:
     the source. grep is dependency-free (unlike jq/python on a pivot). The
     `"id":"CVE-..."` pattern targets the primary id field, not CVE IDs merely
     mentioned inside another entry's references/description."""
-    return (
-        f"curl -sS -G --max-time 20 {_NVD_URL} "
+    # Subshell keeps the trap/local variables out of the persistent agent shell.
+    return "\n".join([
+        '(',
+        'scs_nvd=$(mktemp) || { echo __NVD_ERROR__; exit 1; }',
+        "trap 'rm -f -- \"$scs_nvd\"' EXIT",
+        f"if curl --disable --fail -sS -G --max-time 20 --max-filesize 5000000 {_NVD_URL} "
         f"--data-urlencode {shlex.quote('keywordSearch=' + query)} "
-        f"--data-urlencode {shlex.quote('resultsPerPage=' + str(n))} 2>/dev/null "
-        r"""| grep -oE '"id":"CVE-[0-9]{4}-[0-9]{3,7}"' """
-        r"""| grep -oE 'CVE-[0-9]{4}-[0-9]{3,7}' """
-        f"| head -n {n}"
-    )
+        f"--data-urlencode {shlex.quote('resultsPerPage=' + str(n))} "
+        '--output "$scs_nvd"; then',
+        "  if grep -q '\"vulnerabilities\"' \"$scs_nvd\"; then",
+        '    echo __NVD_OK__',
+        r'''    grep -oE '"totalResults"[[:space:]]*:[[:space:]]*[0-9]+' "$scs_nvd" | head -n 1''',
+        r'''    grep -oE '"id"[[:space:]]*:[[:space:]]*"CVE-[0-9]{4}-[0-9]{4,}"' "$scs_nvd" '''
+        r'''| grep -oE 'CVE-[0-9]{4}-[0-9]{4,}' ''' + f'| head -n {n}',
+        '  else echo __NVD_ERROR__; fi',
+        'else echo __NVD_ERROR__; fi',
+        ')',
+    ])
 
 
 def _parse_nvd_ids(raw: str, max_results: int) -> list[dict]:
     out: list[dict] = []
     seen: set[str] = set()
     for line in raw.splitlines():
-        m = _CVE_RE.search(line)
+        m = _CVE_RE.fullmatch(line.strip())
         if m and m.group(0) not in seen:
             seen.add(m.group(0))
-            out.append({"source": "nvd", "id": m.group(0)})
+            out.append({"source": "nvd", "id": m.group(0), "verification": "unverified",
+                        "match_basis": "keyword_search", "url": "https://nvd.nist.gov/vuln/detail/" + m.group(0)})
             if len(out) >= max_results:
                 break
     return out
@@ -106,7 +119,8 @@ async def _run(args: dict, ctx: PluginContext) -> dict:
 
     candidates: list[dict] = []
     sources_tried: list[str] = []
-    notes: list[str] = []
+    notes: list[str] = ["検索一致は候補のみ。影響バージョン・設定・バックポートを確認するまで finding にしない。"]
+    nvd_status = "not_queried"
 
     # 1) searchsploit(あれば)— オフラインで実際のexploitパスまで分かる
     which = await ctx.run("command -v searchsploit || echo none")
@@ -122,7 +136,12 @@ async def _run(args: dict, ctx: PluginContext) -> dict:
         remaining = max_results - len(candidates)
         sources_tried.append("nvd")
         raw = await ctx.run(_nvd_id_command(query, remaining))
-        nvd = _parse_nvd_ids(raw, remaining)
+        nvd_status = "error" if "__NVD_ERROR__" in raw else ("ok" if "__NVD_OK__" in raw else "unknown")
+        total = re.search(r'"totalResults"\s*:\s*(\d+)', raw)
+        if total and int(total[1]) > remaining:
+            nvd_status = "limited"
+            notes.append(f"NVD検索は全{total[1]}件中の先頭{remaining}件。網羅的な結果ではありません。")
+        nvd = _parse_nvd_ids(raw, remaining) if nvd_status != "error" else []
         if not nvd:
             notes.append("NVDからの結果なし(ネットワーク制限、curl未導入、またはヒットなし)")
         candidates.extend(nvd)
@@ -133,6 +152,8 @@ async def _run(args: dict, ctx: PluginContext) -> dict:
         "candidates": candidates,
         "sources_tried": sources_tried,
         "notes": notes,
+        "nvd_status": nvd_status,
+        "verification": "unverified",
     }
 
 

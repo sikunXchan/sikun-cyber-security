@@ -425,12 +425,14 @@ class SikunApp(App):
         self._refresh_sidebar()
 
     def _merge_ports(self, ports: list[dict]) -> None:
-        seen = {(p.get("port"), p.get("protocol")) for p in self.board["ports"]}
+        seen = {(p.get("host") or self.target, p.get("port"), p.get("protocol")): p for p in self.board["ports"]}
         for p in ports:
-            key = (p.get("port"), p.get("protocol"))
+            key = (p.get("host") or self.target, p.get("port"), p.get("protocol"))
             if key not in seen:
-                self.board["ports"].append(p)
-                seen.add(key)
+                seen[key] = dict(p)
+                self.board["ports"].append(seen[key])
+            else:
+                seen[key].update({k: v for k, v in p.items() if v not in (None, "", "unknown")})
 
     _SPARK = "▁▂▃▄▅▆▇█"
 

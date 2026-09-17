@@ -11,10 +11,15 @@ hosts.
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 import shlex
 import uuid
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
+
+from sikun.http_checks import inspect_http
 
 MAX_OUTPUT_CHARS = 8000
 UI_PREVIEW_CHARS = 700
@@ -30,7 +35,8 @@ def preview_for_ui(output: str, max_chars: int = UI_PREVIEW_CHARS) -> str:
     return output[:max_chars] + f"\n...(+{len(output) - max_chars} chars, 全文はモデルには渡っています)"
 
 
-async def run_bash(command: str, cwd: Path, ssh_host: str | None = None) -> str:
+async def run_bash(command: str, cwd: Path, ssh_host: str | None = None,
+                   *, max_output_chars: int = MAX_OUTPUT_CHARS) -> str:
     """Execute a shell command asynchronously (non-blocking for the Textual loop).
 
     When `ssh_host` is set (e.g. "sikunlily@192.168.11.37"), the command runs
@@ -53,16 +59,17 @@ async def run_bash(command: str, cwd: Path, ssh_host: str | None = None) -> str:
         )
         stdout, _ = await proc.communicate(input=command.encode())
     else:
-        proc = await asyncio.create_subprocess_shell(
-            command,
+        proc = await asyncio.create_subprocess_exec(
+            "bash", "-s",
             cwd=str(cwd),
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await proc.communicate()
+        stdout, _ = await proc.communicate(input=command.encode())
     output = stdout.decode(errors="replace")
-    if len(output) > MAX_OUTPUT_CHARS:
-        output = output[-MAX_OUTPUT_CHARS:]
+    if len(output) > max_output_chars:
+        output = output[-max_output_chars:]
         output = "...(truncated)...\n" + output
     return output or "(no output)"
 
@@ -171,68 +178,81 @@ class PersistentShell:
             pass
 
 
-# nmap -oG port entries are exactly 8 "/"-separated fields:
-# port/state/protocol/owner/service/rpc_info/version/extra_info
-_GREPABLE_FIELD_COUNT = 8
+def _parse_nmap_xml(raw: str, target: str) -> dict:
+    result = {"target": target, "open_ports": [], "uncertain_ports": [],
+              "hosts": [], "coverage": [], "complete": False, "raw": raw[:8000]}
+    start, end = raw.find("<nmaprun"), raw.rfind("</nmaprun>")
+    try:
+        if start < 0 or end < 0 or "...(truncated)..." in raw:
+            raise ValueError("Nmap XML output missing or truncated")
+        root = ET.fromstring(raw[start:end + len("</nmaprun>")])
+    except (ET.ParseError, ValueError) as exc:
+        result["error"] = str(exc)
+        return result
+    result["coverage"] = [dict(info.attrib) for info in root.findall("scaninfo")]
+    for host in root.findall("host"):
+        addresses = [a.get("addr", "") for a in host.findall("address")
+                     if a.get("addrtype") in ("ipv4", "ipv6")]
+        hostname = host.find("hostnames/hostname")
+        address = next(iter(addresses), hostname.get("name", target) if hostname is not None else target)
+        state = host.find("status")
+        result["hosts"].append({"host": address, "addresses": addresses,
+                                "state": state.get("state", "unknown") if state is not None else "unknown",
+                                "extra_ports": [dict(p.attrib) for p in host.findall("ports/extraports")]})
+        for port in host.findall("ports/port"):
+            state = port.find("state")
+            status = state.get("state", "unknown") if state is not None else "unknown"
+            if status == "closed":
+                continue
+            service = port.find("service")
+            attrs = service.attrib if service is not None else {}
+            version = " ".join(attrs[k] for k in ("product", "version", "extrainfo") if attrs.get(k))
+            item = {"host": address, "port": port.get("portid", ""),
+                    "protocol": port.get("protocol", ""), "state": status,
+                    "service": attrs.get("name", "unknown"), "version": version or "unknown",
+                    "product": attrs.get("product", ""), "product_version": attrs.get("version", ""),
+                    "tunnel": attrs.get("tunnel", ""), "method": attrs.get("method", ""),
+                    "confidence": attrs.get("conf", ""),
+                    "cpes": [c.text for c in service.findall("cpe") if c.text] if service is not None else []}
+            result["open_ports" if status == "open" else "uncertain_ports"].append(item)
+    finished = root.find("runstats/finished")
+    result["complete"] = finished is not None and finished.get("exit") == "success"
+    if not result["complete"]:
+        result["error"] = finished.get("errormsg", "Nmap did not finish successfully") if finished is not None else "Nmap completion status missing"
+    return result
 
 
-async def run_nmap_scan(
-    target: str,
-    ports: str = "",
-    service_detection: bool = True,
-    ssh_host: str | None = None,
-) -> dict:
-    """Structured port scan: builds the nmap command, runs it, and parses the
-    grepable (-oG) output into a list of open ports/services — the model
-    doesn't have to hand-write the nmap invocation or regex the human-readable
-    output itself, which is what actually goes wrong in raw-bash recon (typo'd
-    flags, mis-parsed columns). Returns both the parsed list and raw output so
-    the model can fall back to reading the text if parsing missed something.
-    """
-    # -Pn: skip host-discovery ping and assume the target is up. Without it,
-    # nmap silently reports "0 hosts up" and skips the port scan entirely on
-    # plenty of real targets (localhost over WSL2's loopback among them) —
-    # confirmed empirically, not a hypothetical edge case.
-    flags = ["nmap", "-Pn"]
+async def run_nmap_scan(target: str, ports: str = "", service_detection: bool = True,
+                        ssh_host: str | None = None, protocol: str = "tcp") -> dict:
+    """Retain service identity, uncertainty and actual scan coverage from XML."""
+    error = ""
+    if not target or target.startswith("-") or any(c.isspace() for c in target):
+        error = "A single host/IP/CIDR target is required"
+    if protocol not in ("tcp", "udp"):
+        error = "protocol must be tcp or udp"
+    if ports and ports != "-":
+        for span in ports.split(","):
+            if not re.fullmatch(r"[0-9]+(?:-[0-9]+)?", span):
+                error = "Invalid port range"
+                break
+            values = list(map(int, span.split("-")))
+            if not all(1 <= n <= 65535 for n in values) or values[0] > values[-1]:
+                error = "Ports must be within 1-65535 in ascending ranges"
+    if error:
+        return {"target": target, "open_ports": [], "uncertain_ports": [], "complete": False, "error": error}
+    flags = ["nmap", "-Pn", "-sU" if protocol == "udp" else "-sT"]
+    if ":" in target:
+        flags.append("-6")
     if service_detection:
         flags.append("-sV")
     if ports:
         flags.extend(["-p", ports])
-    flags.extend(["-oG", "-", target])
-    command = " ".join(flags)
-
-    raw = await run_bash(command, Path.home(), ssh_host=ssh_host)
-
-    # Parse line-by-line rather than with a single whole-blob regex: a plain
-    # `re.search(r"Ports: (.+?)(?:\tIgnored State|$)", raw)` silently matched
-    # nothing whenever the "Ports:" line wasn't the literal last line of the
-    # output AND had no "Ignored State" suffix — exactly the case for a
-    # single targeted port with nothing to ignore (e.g. `-p 6379` on an open
-    # port). `.` doesn't cross newlines and `$` without MULTILINE only
-    # anchors to the end of the whole string, so the match failed and
-    # open_ports silently came back empty even though the port was open —
-    # confirmed empirically (nmap itself found the port; the parser dropped it).
-    open_ports: list[dict] = []
-    for line in raw.splitlines():
-        if "Ports: " not in line:
-            continue
-        ports_part = line.split("Ports: ", 1)[1]
-        ports_part = ports_part.split("\tIgnored State", 1)[0]
-        for entry in ports_part.split(", "):
-            fields = entry.strip().split("/")
-            if len(fields) < _GREPABLE_FIELD_COUNT or fields[1] != "open":
-                continue
-            port, _state, protocol, _owner, service, _rpc, version, _extra = fields[:8]
-            open_ports.append(
-                {
-                    "port": port,
-                    "protocol": protocol,
-                    "service": service or "unknown",
-                    "version": version.strip() or "unknown",
-                }
-            )
-
-    return {"target": target, "open_ports": open_ports, "raw": raw}
+    flags.extend(["-oX", "-", target])
+    try:
+        raw = await run_bash(shlex.join(flags), Path.home(), ssh_host=ssh_host, max_output_chars=2_000_000)
+    except OSError as exc:
+        raw = f"Execution failed: {exc}"
+    return _parse_nmap_xml(raw, target)
 
 
 _TECH_HINTS: list[tuple[str, str]] = [
@@ -257,83 +277,118 @@ _TECH_HINTS: list[tuple[str, str]] = [
 
 
 def _guess_tech(headers: dict[str, str], body: str) -> list[str]:
-    haystack = (" ".join(f"{k}: {v}" for k, v in headers.items()) + " " + body[:4000]).lower()
-    return sorted({label for needle, label in _TECH_HINTS if needle in haystack})
+    # Framework names in article text are not fingerprints of the serving app.
+    lower = {k.lower(): v.lower() for k, v in headers.items()}
+    header_text = " ".join(f"{k}: {v}" for k, v in lower.items())
+    hints = {label for needle, label in _TECH_HINTS
+             if needle not in {"django", "express", "next.js", "wp-content", "wp-includes"}
+             and needle in header_text}
+    if lower.get("x-powered-by", "").startswith("express"):
+        hints.add("Express/Node.js")
+    sample = body[:6000].lower()
+    if "wp-content/" in sample or "wp-includes/" in sample:
+        hints.add("WordPress")
+    if "/_next/" in sample or "__next_data__" in sample:
+        hints.add("Next.js")
+    if 'name="csrfmiddlewaretoken"' in sample or "name='csrfmiddlewaretoken'" in sample:
+        hints.add("Django")
+    return sorted(hints)
+
+
+def _header_items(raw: str) -> tuple[str, list[tuple[str, str]]]:
+    hops = re.split(r"(?m)^HTTP/\S+\s+(\d+)[^\r\n]*\r?\n", raw)
+    if len(hops) < 3:
+        return "?", []
+    items = []
+    for line in hops[-1].splitlines():
+        if not line.strip():
+            break
+        if ":" in line:
+            key, _, value = line.partition(":")
+            items.append((key.strip(), value.strip()))
+    return hops[-2], items
 
 
 def _parse_http_headers(raw: str) -> tuple[str, dict[str, str]]:
-    """`curl -D -` with -L prints one status-line + header block per redirect
-    hop, back to back. Split on status lines and keep the *last* hop (the
-    page actually rendered) rather than the first, which a single regex over
-    the whole dump would grab by accident on any redirecting target."""
-    hops = re.split(r"(?m)^HTTP/\S+\s+(\d+)[^\r\n]*\r?\n", raw)
-    # capturing-group split interleaves: [pre, code1, block1, code2, block2, ...]
-    if len(hops) < 3:
-        return "?", {}
-    status = hops[-2]
-    header_block = hops[-1]
-    headers: dict[str, str] = {}
-    for line in header_block.splitlines():
-        if ":" in line:
-            key, _, value = line.partition(":")
-            headers[key.strip()] = value.strip()
-    return status, headers
+    status, items = _header_items(raw)
+    return status, dict(items)
+
+
+def _http_url(url: str) -> str:
+    if "://" not in url:
+        url = "http://" + url
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username is not None:
+        raise ValueError("An HTTP(S) URL without embedded credentials is required")
+    if any(ord(c) < 32 for c in url):
+        raise ValueError("Control characters in URL")
+    _ = parsed.port  # Validate malformed/out-of-range ports before execution.
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
+
+
+async def _http_snapshot(url: str, ssh_host: str | None = None) -> dict:
+    """One bounded GET; keep duplicate headers and never follow an unchecked redirect."""
+    marker = "__SIKUN_" + uuid.uuid4().hex
+    command = "\n".join([
+        'scs_tmp=$(mktemp -d) || exit 1',
+        "trap 'rm -f -- \"$scs_tmp/headers\" \"$scs_tmp/body\" \"$scs_tmp/error\"; rmdir -- \"$scs_tmp\"' EXIT",
+        'curl --disable --silent --show-error --globoff --proto =http,https '
+        '--connect-timeout 5 --max-time 15 --max-filesize 262144 '
+        '--header "Accept-Encoding: identity" --dump-header "$scs_tmp/headers" '
+        '--output "$scs_tmp/body" --url ' + shlex.quote(url) + ' 2>"$scs_tmp/error"',
+        'scs_exit=$?',
+        'printf "' + marker + '_META %s " "$scs_exit"',
+        'wc -c < "$scs_tmp/body" 2>/dev/null || echo 0',
+        'printf "' + marker + '_HEADER_SIZE "',
+        'wc -c < "$scs_tmp/headers" 2>/dev/null || echo 0',
+        'printf "' + marker + '_HEADERS\\n"',
+        'head -c 24000 "$scs_tmp/headers" 2>/dev/null',
+        'printf "\\n' + marker + '_BODY\\n"',
+        'head -c 6000 "$scs_tmp/body" 2>/dev/null',
+        'printf "\\n' + marker + '_ERROR\\n"',
+        'head -c 500 "$scs_tmp/error" 2>/dev/null',
+    ])
+    try:
+        raw = await run_bash(command, Path.home(), ssh_host=ssh_host, max_output_chars=32000)
+    except OSError as exc:
+        raw = "\n" + marker + "_ERROR\n" + f"Execution failed: {exc}"
+    meta = re.search(re.escape(marker) + r"_META (\d+)\s+(\d+)", raw)
+    headers_raw = raw.partition(marker + "_HEADERS\n")[2].partition("\n" + marker + "_BODY\n")[0]
+    body = raw.partition("\n" + marker + "_BODY\n")[2].partition("\n" + marker + "_ERROR\n")[0]
+    error = raw.partition("\n" + marker + "_ERROR\n")[2].strip()
+    status, items = _header_items(headers_raw)
+    exit_code, size = (int(meta[1]), int(meta[2])) if meta else (-1, 0)
+    header_size = re.search(re.escape(marker) + r"_HEADER_SIZE\s+(\d+)", raw)
+    headers_complete = header_size is not None and int(header_size[1]) <= 24000
+    complete = exit_code == 0 and status != "?" and headers_complete and "...(truncated)..." not in raw
+    return {"url": url, "status": status, "header_items": items, "headers": dict(items),
+            "raw_headers": headers_raw, "body": body, "size": size, "complete": complete,
+            "body_complete": complete and size <= 6000,
+            "error": error or ("HTTP response incomplete" if not complete else "")}
 
 
 async def run_http_probe(url: str, ssh_host: str | None = None) -> dict:
-    """Structured HTTP recon: status code, response headers, page title, and
-    a best-effort tech-stack guess from header/HTML fingerprints — the model
-    doesn't have to re-derive curl's multi-hop header dump or hand-parse HTML
-    by eye every time it wants to know what's running behind a port. Same
-    'parse once, in code' shape as run_nmap_scan.
-
-    Headers and body are each capped well under PersistentShell/run_bash's
-    MAX_OUTPUT_CHARS truncation limit — that truncation keeps the *tail* of
-    the output, so an uncapped body would silently eat the headers block
-    (which comes first) off the front on any page with a long HTML body.
-    """
-    if not re.match(r"^https?://", url):
-        url = f"http://{url}"
-    quoted = shlex.quote(url)
-    command = (
-        f"echo __SIKUN_HEADERS__; "
-        f"curl -sS -D - -o /dev/null --max-time 15 -L {quoted} | head -c 3000; "
-        f"echo; echo __SIKUN_BODY__; "
-        f"curl -sS --max-time 15 -L {quoted} | head -c 4000"
-    )
-    raw = await run_bash(command, Path.home(), ssh_host=ssh_host)
-
-    headers_raw, _, body = raw.partition("__SIKUN_BODY__")
-    headers_raw = headers_raw.replace("__SIKUN_HEADERS__", "", 1)
-    status, headers = _parse_http_headers(headers_raw)
-
-    title = ""
-    match = re.search(r"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
-    if match:
-        title = re.sub(r"\s+", " ", match.group(1)).strip()
-
-    # Surface the Server header (usually version-bearing, e.g. "Apache/2.4.49")
-    # as a first-class field — the version is exactly what cve_lookup needs, and
-    # tech_hints alone (bare "Apache") dropped it, so the model would look up the
-    # app name instead of the middleware+version. Also expose x-powered-by
-    # (PHP/ASP.NET versions live there).
-    server = next((v for k, v in headers.items() if k.lower() == "server"), "")
-    powered_by = next((v for k, v in headers.items() if k.lower() == "x-powered-by"), "")
-
-    return {
-        "url": url,
-        "status": status,
-        "server": server,
-        "x_powered_by": powered_by,
-        "headers": headers,
-        "title": title,
-        "tech_hints": _guess_tech(headers, body),
-        "raw_headers": headers_raw.strip(),
-    }
+    try:
+        url = _http_url(url)
+    except ValueError as exc:
+        return {"url": url, "status": "?", "title": "", "tech_hints": [], "complete": False, "error": str(exc)}
+    snapshot = await _http_snapshot(url, ssh_host)
+    headers, body = snapshot["headers"], snapshot["body"]
+    lower = {key.lower(): value for key, value in headers.items()}
+    match = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
+    checks = inspect_http(url, snapshot["status"], snapshot["header_items"], body,
+                          complete=snapshot["body_complete"]) if snapshot["complete"] else []
+    return {key: value for key, value in snapshot.items() if key != "body"} | {
+        "title": html.unescape(re.sub(r"\s+", " ", match[1]).strip()) if match else "",
+        "server": lower.get("server", ""), "x_powered_by": lower.get("x-powered-by", ""),
+        "tech_hints": _guess_tech(headers, body), "security_checks": checks,
+        "redirect_to": lower.get("location", "") if snapshot["status"].startswith("3") else "",
+        "notes": ["Redirects are not followed; check the destination scope before probing it.",
+                  "Configuration observations require impact validation before reporting a vulnerability."]}
 
 
-# Small built-in sweep used when neither gobuster nor a custom wordlist is
-# available on the target — enough to catch the usual low-hanging fruit
+# Small built-in sweep calibrated against each parent's missing-path responses.
+# Enough to identify common discovery candidates
 # (exposed .git/.env, admin panels, debug endpoints) without depending on
 # SecLists or dirb's wordlists being installed on whatever host this runs on.
 _DEFAULT_DIR_WORDLIST = [
@@ -351,60 +406,81 @@ _DEFAULT_DIR_WORDLIST = [
 ]
 
 
+def _normalized_response(snapshot: dict, path: str) -> tuple:
+    # Only normalize the requested path. Do not mask numbers, arbitrary tokens,
+    # or equal-length bodies: those can distinguish real resources from errors.
+    lower = {key.lower(): value for key, value in snapshot["header_items"]}
+    body = snapshot["body"]
+    location = lower.get("location", "")
+    variants = {snapshot["url"], urlsplit(snapshot["url"]).path, path,
+                unquote(path), quote(path, safe=""), html.escape(path)} - {"", "/"}
+    for variant in sorted(variants, key=len, reverse=True):
+        body = body.replace(variant, "<requested-path>")
+        location = location.replace(variant, "<requested-path>")
+    return snapshot["status"], lower.get("content-type", ""), location, body
+
+
 async def run_dir_enum(url: str, wordlist: str = "", ssh_host: str | None = None) -> dict:
-    """Structured content/directory discovery. Prefers `gobuster dir` when
-    it's installed on the target (fast, and its `(Status: N) [Size: M]`
-    output format is stable enough to parse reliably); otherwise falls back
-    to sweeping a small built-in common-paths wordlist with plain curl, so
-    the tool still works on a bare host that only has curl on it. Returns
-    parsed {path, status, size} entries plus the raw scanner output so the
-    model can fall back to reading the text if parsing missed something —
-    same contract as run_nmap_scan.
-    """
-    if not re.match(r"^https?://", url):
-        url = f"http://{url}"
-    base = url.rstrip("/")
+    """Calibrated discovery; ambiguous catch-all responses are retained separately."""
+    result = {"url": url, "source": "calibrated-curl", "found": [], "ambiguous": [],
+              "errors": [], "complete": False, "tested_paths": [], "raw": ""}
+    try:
+        parsed = urlsplit(_http_url(url))
+        if parsed.query:
+            raise ValueError("Directory enumeration requires a base URL without a query")
+        base = urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+        paths = list(dict.fromkeys(p.strip().lstrip("/") for p in wordlist.split(",") if p.strip())) if wordlist else list(_DEFAULT_DIR_WORDLIST)
+        if len(paths) > 200:
+            raise ValueError("At most 200 paths per scan; split larger wordlists explicitly")
+        if any(p.startswith("/") or any(c in p for c in ("?", "#", "\\")) or
+               ".." in unquote(p).split("/") or "://" in p for p in paths):
+            raise ValueError("Wordlist entries must be paths beneath the base URL")
+    except ValueError as exc:
+        return result | {"error": str(exc)}
+    result["url"] = base
+    semaphore = asyncio.Semaphore(4)
 
-    paths = [p.strip().lstrip("/") for p in wordlist.split(",") if p.strip()] or _DEFAULT_DIR_WORDLIST
+    async def fetch(path):
+        async with semaphore:
+            return await _http_snapshot(base + "/" + quote(path, safe="/@:+-._~"), ssh_host)
 
-    which = (await run_bash("command -v gobuster || echo none", Path.home(), ssh_host=ssh_host)).strip()
-
-    if which and which != "none":
-        wl_path = f"/tmp/sikun_dir_wordlist_{uuid.uuid4().hex}.txt"
-        wl_body = "\n".join(paths)
-        await run_bash(
-            f"cat > {shlex.quote(wl_path)} << 'SIKUN_EOF'\n{wl_body}\nSIKUN_EOF",
-            Path.home(),
-            ssh_host=ssh_host,
-        )
-        command = (
-            f"gobuster dir -u {shlex.quote(base)} -w {shlex.quote(wl_path)} "
-            f"-q --no-color --timeout 10s 2>&1; rm -f {shlex.quote(wl_path)}"
-        )
-        raw = await run_bash(command, Path.home(), ssh_host=ssh_host)
-        source = "gobuster"
-        found = []
-        for line in raw.splitlines():
-            m = re.match(r"^(\S+)\s+\(Status:\s*(\d+)\)\s*\[Size:\s*(\d+)\]", line.strip())
-            if m:
-                found.append({"path": m.group(1), "status": int(m.group(2)), "size": int(m.group(3))})
-    else:
-        script = (
-            "for p in " + " ".join(shlex.quote(p) for p in paths) + "; do\n"
-            f'  code=$(curl -s -o /dev/null -w "%{{http_code}}" --max-time 8 "{base}/$p")\n'
-            '  echo "$code $p"\n'
-            "done"
-        )
-        raw = await run_bash(script, Path.home(), ssh_host=ssh_host)
-        source = "builtin-curl-fallback"
-        found = []
-        for line in raw.splitlines():
-            parts = line.strip().split(maxsplit=1)
-            if len(parts) != 2 or not parts[0].isdigit():
-                continue
-            code = int(parts[0])
-            if code in (0, 404):
-                continue
-            found.append({"path": parts[1] or "/", "status": code, "size": None})
-
-    return {"url": base, "source": source, "found": found, "raw": raw}
+    # Calibrate each parent directory; nested handlers often differ from root.
+    parents = sorted({p.rpartition("/")[0] for p in paths})
+    baselines = {}
+    for parent in parents:
+        probes = [(parent + "/" if parent else "") + "scs-missing-" + uuid.uuid4().hex for _ in range(2)]
+        samples = await asyncio.gather(*(fetch(p) for p in probes))
+        usable = all(s["complete"] and s["body_complete"] for s in samples)
+        signatures = [_normalized_response(s, p) for s, p in zip(samples, probes)]
+        baselines[parent] = (usable and signatures[0] == signatures[1], signatures[0])
+        for p, s in zip(probes, samples):
+            if not s["complete"]:
+                result["errors"].append({"path": p, "error": s["error"], "phase": "calibration"})
+    snapshots = await asyncio.gather(*(fetch(p) for p in paths))
+    for path, snapshot in zip(paths, snapshots):
+        result["tested_paths"].append(path or "/")
+        if not snapshot["complete"]:
+            result["errors"].append({"path": path or "/", "error": snapshot["error"]})
+            continue
+        code = int(snapshot["status"])
+        if code in (404, 410):
+            continue
+        item = {"path": path or "/", "status": code, "size": snapshot["size"],
+                "verification": "unverified"}
+        stable, signature = baselines[path.rpartition("/")[0]]
+        if not stable or not snapshot["body_complete"]:
+            item["reason"] = "unstable_or_incomplete_baseline"
+        elif _normalized_response(snapshot, path) == signature:
+            item["reason"] = "matches_missing_path_response"
+        elif code >= 500 or code == 429:
+            item["reason"] = "server_error_or_rate_limit"
+        else:
+            item["reason"] = "differs_from_missing_path_response"
+            result["found"].append(item)
+            continue
+        result["ambiguous"].append(item)
+    result["complete"] = not result["errors"]
+    result["coverage"] = {"requested": len(paths), "tested": len(snapshots),
+                          "calibration_requests": len(parents) * 2,
+                          "ambiguous": len(result["ambiguous"])}
+    return result

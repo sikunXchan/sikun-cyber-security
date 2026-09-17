@@ -111,13 +111,13 @@ def test_http_probe_surfaces_server_version():
 
     from sikun import tools
 
-    raw = (
-        "__SIKUN_HEADERS__\nHTTP/1.1 200 OK\r\nServer: Apache/2.4.49\r\n"
-        "X-Powered-By: PHP/7.4.3\r\n\r\n__SIKUN_BODY__<title>x</title>"
-    )
-
-    async def fake_bash(*a, **k):
-        return raw
+    async def fake_bash(command, *a, **k):
+        import re
+        marker = re.search(r"__SIKUN_[0-9a-f]+", command)[0]
+        return (f"{marker}_META 0 16\n{marker}_HEADER_SIZE 100\n{marker}_HEADERS\n"
+                "HTTP/1.1 200 OK\r\nServer: Apache/2.4.49\r\n"
+                f"X-Powered-By: PHP/7.4.3\r\n\r\n\n{marker}_BODY\n<title>x</title>"
+                f"\n{marker}_ERROR\n")
 
     with mock.patch.object(tools, "run_bash", fake_bash):
         result = asyncio.run(tools.run_http_probe("http://127.0.0.1:8080"))
@@ -659,7 +659,8 @@ def test_turn_productivity_detection_drives_self_correction():
         return SimpleNamespace(function_call=None, function_response=SimpleNamespace(name=name, response=response))
 
     # productive signals
-    assert _turn_was_productive([call("report", channel="finding")], [])
+    assert _turn_was_productive([call("report", channel="finding", evidence="observed response")], [])
+    assert not _turn_was_productive([call("report", channel="finding")], [])
     assert _turn_was_productive([], [resp("nmap_scan", {"open_ports": [{"port": 22}]})])
     assert _turn_was_productive([], [resp("dir_enum", {"found": [{"path": "/admin"}]})])
     assert _turn_was_productive([], [resp("http_probe", {"status": "200"})])
