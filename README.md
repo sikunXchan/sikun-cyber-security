@@ -133,6 +133,33 @@ PLUGIN = ToolPlugin(
 findings は**検証必須**: `report(finding)` は再現の証拠を `evidence` 引数に添えるルール
 (未確認なら recon で「要確認」)。誤検知を出さないための仕組み。
 
+### 検出結果と検査範囲
+
+- `nmap_scan` は XML を解析し、ホスト・製品・バージョン・CPE・検出方法/確度を保持する。
+  `protocol="udp"` で UDP も指定できる(実行権限が必要)。既定は TCP 上位1000ポート。
+  `coverage` が実際の検査範囲、`uncertain_ports` が filtered / open|filtered 等の未確定結果。
+  XML破損や実行失敗は `complete=false` と `error` を返し、正常終了と区別する。
+- `http_probe` は1回のGETからヘッダーと本文を取得し、重複した Set-Cookie を保持する。
+  `security_checks` で HSTS、Content-Type保護、CSP、フレーム制限、Cookie属性、混在コンテンツ、
+  パスワードフォームのHTTP使用を観測する。`review` は影響の検証が必要な設定項目で、確定脆弱性ではない。
+  HTML限定の検査はJSON等に適用しない。本文は先頭6000バイトを解析し、切詰め時に未観測部分を正常扱いしない。
+  取得上限は256KiB、ヘッダー上限は24,000バイト。超過や通信失敗は検査未完了とする。
+  リダイレクトは追跡せず `redirect_to` を返す。認可範囲を確認してから転送先を別途調べる。
+- `dir_enum` は各親ディレクトリにランダムな不存在パスを2件送り、応答を比較する。
+  soft-404(存在しないパスでも200)や共通転送、動的/大きな応答は `ambiguous` に残す。
+  `found` も公開内容を未検証の候補。応答サイズだけの一致では除外しない。
+  curlによる同時4リクエスト、指定上限200パス。較正分のリクエストが追加される。
+  gobusterの有無に依存しないため、同じ判定基準を使える。
+- `cve_lookup` はキーワード一致を `verification="unverified"` と明示する。
+  `nvd_status` で取得失敗・検索上限を区別する。CPEによる厳密な影響バージョン判定や、
+  ベンダーのバックポート判定は自動化していない。検索候補だけで脆弱性を確定しない。
+- 根拠のない `report(finding)` はボードへの表示・永続メモリへの保存前に拒否する。
+  非空の証拠文字列の存在を検査するもので、証拠自体の正しさを保証する機能ではない。
+
+設計上の参照: [Nmap XML出力](https://nmap.org/book/output-formats-xml-output.html)、
+[OWASP HTTP Headers Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html)。
+これらは偵察と受動的なHTTP設定検査の強化であり、認可制御・業務ロジック・SQLi/XSS等の網羅検査ではない。
+
 ## 安全装置(スコープ強制)
 
 配布時の事故(認可範囲外のホストへの誤爆)を防ぐため、プロファイルに **`scope`**
@@ -176,6 +203,10 @@ python tests/test_foundation.py     # 追加依存なしで実行できる(オ�
 # または
 pip install -r requirements-dev.txt && pytest
 ```
+
+追加の検出回帰テスト: `python -m pytest tests/test_detection.py -q`。
+APIキーや外部の攻撃対象は不要。HTTP統合テストはループバックの模擬サーバーと bash/curl を使用する
+(未導入なら該当テストはskip)。Windowsでは `PYTHONUTF8=1` を設定して全体テストを実行できる。
 
 ## セッション中のコマンド
 

@@ -69,12 +69,25 @@ class TargetMemory:
         return bool(self.ports or self.findings)
 
     def add_ports(self, ports: list) -> None:
-        seen = {(p.get("port"), p.get("protocol")) for p in self.ports}
+        seen = {(p.get("host") or self.target, p.get("port"), p.get("protocol")): p for p in self.ports}
         for p in ports:
-            key = (p.get("port"), p.get("protocol"))
+            key = (p.get("host") or self.target, p.get("port"), p.get("protocol"))
+            fields = ("host", "port", "protocol", "service", "version", "product", "product_version",
+                      "cpes", "tunnel", "method", "confidence")
             if key not in seen:
-                self.ports.append({k: p.get(k) for k in ("port", "protocol", "service", "version")})
-                seen.add(key)
+                seen[key] = {}
+                self.ports.append(seen[key])
+            existing = seen[key]
+            if p.get("method") == "probed":
+                for field in fields:
+                    if field not in ("host", "port", "protocol"):
+                        existing.pop(field, None)
+            for field in fields:
+                value = p.get(field)
+                if value is not None and value != "" and value != "unknown" and value != []:
+                    if p.get("method") == "table" and existing.get("method") == "probed" and field not in ("host", "port", "protocol"):
+                        continue
+                    existing[field] = value
 
     def add_finding(self, severity: str | None, text: str, evidence: str = "") -> None:
         for existing in self.findings:  # dedup by (severity, text)
@@ -119,7 +132,7 @@ class TargetMemory:
         if self.ports:
             shown = self.ports[:_MAX_PORTS_IN_SUMMARY]
             portstr = ", ".join(
-                f"{p.get('port')}/{p.get('protocol', '')} {p.get('service', '')} {p.get('version', '')}".strip()
+                f"{p.get('host') or self.target}:{p.get('port')}/{p.get('protocol', '')} {p.get('service', '')} {p.get('version', '')}".strip()
                 for p in shown
             )
             extra = f" (+{len(self.ports) - len(shown)})" if len(self.ports) > len(shown) else ""

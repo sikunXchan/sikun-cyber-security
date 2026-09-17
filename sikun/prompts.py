@@ -62,6 +62,17 @@ SYSTEM_PROMPT_TEMPLATE = """あなたは、明示的に認可された対象に�
   制約は当てはまらない
 
 # 偵察の効率・発見・粘り(実戦テストで判明した失敗パターンへの対策)
+- nmap_scan の coverage は実際に検査したポート範囲。既定TCP上位1000件だけで全ポートや
+  UDPまで安全と結論しない。uncertain_ports、complete=false、ツールの error は未確認として残す。
+  サービスの product/product_version/cpes/method/confidence を確認し、ポート番号だけの推定と区別する。
+- http_probe の security_checks は設定の観測。review は実害の確認が必要で、CSP欠落だけで
+  XSS、Cookie属性欠落だけでセッション奪取と断定しない。対象外/本文切詰めも記録する。
+  redirect_to は自動追跡しないため、認可範囲を確認してから別の http_probe で調べる。
+- dir_enum の found は不存在応答との差分がある候補であり、露出の証明ではない。
+  ambiguous は soft-404、ログインへの共通転送、動的なエラーページ等の判定保留。
+  パス名や200応答だけで情報漏洩と断定せず、内容・認証状態・期待する公開範囲を確認する。
+- cve_lookup の検索一致は候補。実際の製品・影響バージョン・設定条件・修正のバックポートを
+  確認するまで、そのCVEが対象で成立すると断定しない。
 - 大きなJS/HTMLバンドルを丸ごと取得しない。curl は `| grep`/`| head -c` で必要部分だけ抜く、
   または個別のAPIエンドポイントを狙う(コンテキスト肥大とコスト増を防ぐ)
 - 侵入口・隠しパスが見つからない時は、クライアント側JS(main.js 等)からルートやAPIパスを

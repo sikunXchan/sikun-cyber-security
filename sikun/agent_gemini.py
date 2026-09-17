@@ -206,6 +206,10 @@ NMAP_SCAN_DECLARATION = types.FunctionDeclaration(
                 "type": "boolean",
                 "description": "サービスバージョン検出(-sV)を行うか。デフォルトtrue",
             },
+            "protocol": {
+                "type": "string", "enum": ["tcp", "udp"],
+                "description": "既定tcp。UDPは明示指定し、実行環境の権限も確認する。",
+            },
         },
         "required": ["target"],
     },
@@ -217,7 +221,9 @@ HTTP_PROBE_DECLARATION = types.FunctionDeclaration(
         "対象URL/ホストにHTTPリクエストを送り、ステータスコード・レスポンスヘッダ・"
         "ページタイトル・技術スタックの推測を構造化して返す。bashでcurlを叩いて生の"
         "ヘッダやHTMLを自分で読むより信頼性が高いので、Webサービスの初期調査(何が"
-        "動いているかの把握)にはこちらを優先して使うこと。"
+        "動いているかの把握)にはこちらを優先して使うこと。security_checks は根拠付きの"
+        "HTTP設定観測(HSTS/CSP/フレーム制限/Cookie/混在コンテンツ/パスワード送信)。"
+        "review を確定脆弱性と扱わない。redirect_to はスコープを確認後、別途調査する。"
     ),
     parameters={
         "type": "object",
@@ -235,9 +241,9 @@ DIR_ENUM_DECLARATION = types.FunctionDeclaration(
     name="dir_enum",
     description=(
         "対象URL配下のディレクトリ・ファイルを探索し、見つかったパスとステータスコードを"
-        "構造化して返す(gobusterが対象にあれば使用、無ければ組み込みの簡易ワードリストで"
-        "curlスイープにフォールバック)。隠しパネル・バックアップファイル・.git/.env等の"
-        "露出確認に使う。"
+        "構造化して返す。各親ディレクトリのランダムな不存在パス2件と比較し、"
+        "soft-404/共通ログイン画面は ambiguous に分離する。found も未検証の候補。"
+        "errors/complete/coverage を確認し、未検査を安全と結論しない。最大200パス。"
     ),
     parameters={
         "type": "object",
@@ -403,6 +409,22 @@ def _estimate_cost(usage, model: str) -> float:
     return cost
 
 
+async def _record_report(app, memory: TargetMemory, args: dict) -> dict:
+    channel = args.get("channel", "system")
+    text = args.get("text", "")
+    severity = args.get("severity")
+    evidence = args.get("evidence")
+    if channel == "finding" and (not isinstance(evidence, str) or not evidence.strip()):
+        await app.post_event("system", "[yellow]根拠なしの finding を拒否しました。[/yellow]")
+        return {"error": "finding には空でない evidence が必要です。未検証なら recon で報告してください。"}
+    await app.post_event(channel, text, severity)
+    if channel == "finding":
+        memory.add_finding(severity, text, evidence)
+        memory.save()
+        await app.post_event("system", f"[dim]  ⎿ 根拠: {evidence}[/dim]")
+    return {"result": "ok"}
+
+
 def _turn_was_productive(call_parts: list, response_parts: list) -> bool:
     """Did this turn move the operation forward? Used to detect a stall (a run
     of tool-active turns with no new progress) so the loop can inject a
@@ -412,7 +434,9 @@ def _turn_was_productive(call_parts: list, response_parts: list) -> bool:
     only costs one extra reasoning turn (gated by a cooldown)."""
     for part in call_parts:
         fc = getattr(part, "function_call", None)
-        if fc and fc.name == "report" and (fc.args or {}).get("channel") == "finding":
+        if (fc and fc.name == "report" and (fc.args or {}).get("channel") == "finding"
+                and isinstance((fc.args or {}).get("evidence"), str)
+                and fc.args["evidence"].strip()):
             return True
     for part in response_parts:
         fr = getattr(part, "function_response", None)
@@ -423,7 +447,7 @@ def _turn_was_productive(call_parts: list, response_parts: list) -> bool:
             return True
         if fr.name == "dir_enum" and resp.get("found"):
             return True
-        if fr.name == "http_probe":
+        if fr.name == "http_probe" and not resp.get("error"):
             status = str(resp.get("status", ""))
             if status[:1] in ("2", "3") or status in ("401", "403"):
                 return True
@@ -816,24 +840,9 @@ async def _run_loop(
                         types.Part.from_function_response(name=fc.name, response={"output": output})
                     )
                 elif fc.name == "report":
-                    args = fc.args or {}
-                    channel = args.get("channel", "system")
-                    text = args.get("text", "")
-                    severity = args.get("severity")
-                    evidence = args.get("evidence")
-                    await app.post_event(channel, text, severity)
-                    if channel == "finding":
-                        memory.add_finding(severity, text, evidence or "")
-                        memory.save()
-                        if evidence:
-                            await app.post_event("system", f"[dim]  ⎿ 根拠: {evidence}[/dim]")
-                        else:
-                            await app.post_event(
-                                "system",
-                                "[yellow]  ⎿ 根拠(evidence)なしの finding — 未確認なら recon で報告を[/yellow]",
-                            )
+                    result = await _record_report(app, memory, fc.args or {})
                     function_response_parts.append(
-                        types.Part.from_function_response(name=fc.name, response={"result": "ok"})
+                        types.Part.from_function_response(name=fc.name, response=result)
                     )
                 elif fc.name == "nmap_scan":
                     args = fc.args or {}
@@ -863,13 +872,17 @@ async def _run_loop(
                         ports=args.get("ports", "") or "",
                         service_detection=args.get("service_detection", True),
                         ssh_host=ssh_host,
+                        protocol=args.get("protocol", "tcp"),
                     )
                     if scan_result["open_ports"]:
                         ports_summary = ", ".join(
                             f"{p['port']}/{p['protocol']} {p['service']}" for p in scan_result["open_ports"]
                         )
                     else:
-                        ports_summary = "(開いているポートなし)"
+                        ports_summary = "(検査範囲内で開いているポートなし)"
+                    if not scan_result.get("complete", False):
+                        ports_summary += " 検査未完了: " + scan_result.get("error", "詳細を確認")
+                    ports_summary += f" / 未確定ポート={len(scan_result.get('uncertain_ports', []))}"
                     _notify_board(app, ports=scan_result["open_ports"])
                     if scan_result["open_ports"]:
                         memory.add_ports(scan_result["open_ports"])
@@ -903,6 +916,9 @@ async def _run_loop(
                         f"title={probe_result['title'] or '(なし)'} "
                         f"tech={', '.join(probe_result['tech_hints']) or '(不明)'}"
                     )
+                    if probe_result.get("error"):
+                        summary += " 検査未完了: " + probe_result["error"]
+                    summary += f" / 設定要確認={sum(c['status'] == 'review' for c in probe_result.get('security_checks', []))}"
                     await app.post_event("system", render_tool_result(summary))
                     function_response_parts.append(
                         types.Part.from_function_response(name=fc.name, response=probe_result)
@@ -933,7 +949,10 @@ async def _run_loop(
                             f"{f['path']}({f['status']})" for f in enum_result["found"]
                         )
                     else:
-                        found_summary = "(発見なし)"
+                        found_summary = "(候補なし)"
+                    found_summary += f" / 判定保留={len(enum_result.get('ambiguous', []))} / エラー={len(enum_result.get('errors', []))}"
+                    if enum_result.get("error"):
+                        found_summary += " " + enum_result["error"]
                     await app.post_event(
                         "system", render_tool_result(f"[{enum_result['source']}] {found_summary}")
                     )

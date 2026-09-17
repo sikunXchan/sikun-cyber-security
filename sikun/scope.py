@@ -68,6 +68,14 @@ class Scope:
                 self.hostnames.add(host.lower())
 
     def contains(self, target: str) -> bool:
+        if "://" not in target and "/" in target and target.rsplit("/", 1)[1].isdigit():
+            try:
+                requested = ipaddress.ip_network(target, strict=False)
+            except ValueError:
+                pass  # A schemeless URL may have a numeric path component.
+            else:
+                return any(requested.version == net.version and requested.subnet_of(net)
+                           for net in self.networks)
         host = host_of(target)
         if not host:
             return False
