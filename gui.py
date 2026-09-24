@@ -16,6 +16,7 @@ import sys
 from dotenv import load_dotenv
 
 from sikun.agent_gemini import run_agent
+from sikun.engine import resolve_engine
 from sikun.profile import load_profile
 from sikun.webapp import WebApp
 
@@ -25,6 +26,9 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Sikun Cyber Security - ネイティブデスクトップUI")
     parser.add_argument("target", nargs="?", help="認可された対象 (IP/ホスト名/URL)")
+    parser.add_argument("--engine", choices=["auto", "codex", "gemini"],
+                        default=os.environ.get("SIKUN_ENGINE", "auto"),
+                        help="AI実行エンジン。autoはCodex SDKを優先し、なければGeminiを使う")
     parser.add_argument(
         "--profile",
         default=os.environ.get("SIKUN_PROFILE"),
@@ -51,6 +55,7 @@ def main() -> None:
 
     try:
         profile = load_profile(args.profile)
+        engine = resolve_engine(args.engine)
     except (FileNotFoundError, ValueError) as exc:
         print(f"プロファイル読み込みエラー: {exc}")
         sys.exit(1)
@@ -70,6 +75,7 @@ def main() -> None:
                 sys.exit(1)
 
     app = WebApp(target=target, profile_name=profile.name, start_mode=start_mode)
+    app.board["provider"] = engine
     app.run(
         agent_factory=functools.partial(
             run_agent,
@@ -78,6 +84,7 @@ def main() -> None:
             initial_instruction=args.initial_instruction,
             profile=profile,
             startup_status=args.status,
+            engine=engine,
         )
     )
 

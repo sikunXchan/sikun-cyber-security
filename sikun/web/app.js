@@ -80,9 +80,13 @@ const SEV_ORDER = ["critical", "high", "medium", "low", "info"];
 
 function renderBoard(b) {
   document.getElementById("tb-model").textContent = b.model || "-";
+  const codex = b.provider === "codex";
   const cost = "$" + (b.cost || 0).toFixed(4);
   document.getElementById("tb-cost").textContent = cost;
   document.getElementById("side-cost").textContent = cost;
+  document.getElementById("tb-cost").hidden = codex;
+  document.getElementById("side-cost").closest(".stat-row").hidden = codex;
+  document.getElementById("cost-spark").parentElement.hidden = codex;
   document.getElementById("side-phase").textContent = b.phase || "-";
   const cwdEl = document.getElementById("side-cwd");
   cwdEl.textContent = b.cwd || "~";
@@ -93,7 +97,7 @@ function renderBoard(b) {
   lastCmdEl.textContent = b.last_cmd || "(idle)";
   lastCmdEl.title = b.last_cmd || "";
 
-  renderSparkline(b.cost_history || []);
+  renderSparkline(codex ? [] : (b.cost_history || []));
   renderPorts(b.ports || []);
   renderFindings(b.findings || {});
 }

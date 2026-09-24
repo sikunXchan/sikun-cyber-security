@@ -145,6 +145,7 @@ class SikunApp(App):
         # it via update_board(); finding counts/phase are derived in post_event.
         self.board: dict[str, Any] = {
             "model": "",
+            "provider": "gemini",
             "cost": 0.0,
             "phase": "-",
             "cwd": "",           # live shell cwd (from PersistentShell.cwd_live)
@@ -365,8 +366,10 @@ class SikunApp(App):
         mm, ss = divmod(elapsed, 60)
         mode = self.session_state.get("mode", "security")
         model = self.board.get("model") or "-"
+        codex = self.board.get("provider") == "codex"
         cost = self.board.get("cost", 0.0)
         sep = "[#2b3a5a]│[/#2b3a5a]"
+        cost_text = "" if codex else f"[#39ff14]${cost:.4f}[/#39ff14] {sep} "
         if self._activity:
             spin = self._SPINNER[self._frame % len(self._SPINNER)]
             lead = f"[bold #ff2bd6]{spin}[/bold #ff2bd6]"
@@ -379,7 +382,7 @@ class SikunApp(App):
             f"[dim #6a7a99]tgt[/dim #6a7a99] [#ff3bd6]{self.target}[/#ff3bd6] {sep} "
             f"[dim #6a7a99]mode[/dim #6a7a99] [#b26bff]{mode}[/#b26bff] {sep} "
             f"[dim #6a7a99]model[/dim #6a7a99] [#c7f5ff]{model}[/#c7f5ff] {sep} "
-            f"[#39ff14]${cost:.4f}[/#39ff14] {sep} [#00f0ff]{mm:02d}:{ss:02d}[/#00f0ff]{tail}"
+            f"{cost_text}[#00f0ff]{mm:02d}:{ss:02d}[/#00f0ff]{tail}"
         )
 
     def _tick(self) -> None:
@@ -471,8 +474,9 @@ class SikunApp(App):
         L.append("")
 
         # COST + sparkline
-        L.append(f"[bold #ffb000]◆ COST[/bold #ffb000] [#39ff14]${b.get('cost', 0.0):.4f}[/#39ff14]")
-        L.append(" " + self._sparkline(b.get("cost_history", [])))
+        if b.get("provider") != "codex":
+            L.append(f"[bold #ffb000]◆ COST[/bold #ffb000] [#39ff14]${b.get('cost', 0.0):.4f}[/#39ff14]")
+            L.append(" " + self._sparkline(b.get("cost_history", [])))
         L.append("")
 
         # PORTS
@@ -581,7 +585,7 @@ class SikunApp(App):
             self.session_state["effort"] = arg
             await self.post_event(
                 "system",
-                f"[bold green]effort設定: {arg}(次のターンから反映。Geminiバックエンドでは"
+                f"[bold green]effort設定: {arg}(次のターンから反映。現在のエンジンでは"
                 "現状効果なし)[/bold green]",
             )
         elif cmd == "plan":

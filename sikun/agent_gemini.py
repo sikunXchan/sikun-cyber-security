@@ -503,9 +503,11 @@ async def run_agent(
     ssh_host: str | None = None,
     profile: Profile | None = None,
     startup_status: bool = False,
+    engine: str = "gemini",
 ) -> None:
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
+    if engine not in {"gemini", "codex"}:
+        raise ValueError(f"Unknown agent engine: {engine}")
+    if engine == "gemini" and not os.environ.get("GEMINI_API_KEY"):
         await app.post_event(
             "system",
             "[bold red]GEMINI_API_KEY が未設定です。.env に設定してから起動し直してください。[/bold red]",
@@ -513,29 +515,34 @@ async def run_agent(
         return
 
     profile = profile or Profile()
-    client = genai.Client()
-    workdir = workdir or Path.home()
+    workdir = workdir or (Path.cwd() if engine == "codex" else Path.home())
+    if engine == "codex":
+        from sikun.agent_codex import CodexModelAdapter
+
+        client = CodexModelAdapter(workdir, app.session_state.get("mode", "security"))
+        app.session_state.setdefault("model", "full")
+    else:
+        client = genai.Client()
 
     # Profile-driven config: persona, model override, and auto-loaded tool
     # plugins — all optional, all falling back to the built-ins when the
     # profile leaves them unset.
     persona = profile.persona
-    full_model = profile.model or FULL_MODEL
-    lite_model = LITE_MODEL
+    if engine == "codex":
+        full_model = (profile.model if profile.model and profile.model.startswith("gpt-")
+                      else os.environ.get("SIKUN_CODEX_MODEL", "gpt-6-sol"))
+        lite_model = os.environ.get("SIKUN_CODEX_LITE_MODEL", "gpt-6-luna")
+    else:
+        full_model = profile.model or FULL_MODEL
+        lite_model = LITE_MODEL
 
     load_result = load_plugins(profile.plugin_dirs)
     plugin_map = {p.name: p for p in load_result.plugins}
-    tool_obj = types.Tool(
-        function_declarations=[
-            BASH_DECLARATION,
-            REPORT_DECLARATION,
-            NMAP_SCAN_DECLARATION,
-            HTTP_PROBE_DECLARATION,
-            DIR_ENUM_DECLARATION,
-            PLAN_DECLARATION,
-            *_plugin_declarations(load_result.plugins),
-        ]
-    )
+    declarations = [REPORT_DECLARATION, NMAP_SCAN_DECLARATION,
+                    HTTP_PROBE_DECLARATION, DIR_ENUM_DECLARATION, PLAN_DECLARATION]
+    if engine == "gemini":
+        declarations = [BASH_DECLARATION, *declarations, *_plugin_declarations(load_result.plugins)]
+    tool_obj = types.Tool(function_declarations=declarations)
     for err in load_result.errors:
         await app.post_event("system", f"[yellow]プラグイン警告: {err}[/yellow]")
     if plugin_map:
@@ -546,9 +553,14 @@ async def run_agent(
     # Scope guard: authorized-target enforcement + audit log. The CLI target is
     # auto-allowed when scope is set; empty scope means enforcement is off.
     scope_entries = list(profile.scope)
-    if scope_entries:
+    codex_target_valid = bool(target and not target.startswith("("))
+    if engine == "codex" and codex_target_valid:
+        scope_entries.append(target)
+    elif engine == "gemini" and scope_entries:
         scope_entries.append(target)
     guard = ScopeGuard(Scope(scope_entries), LOG_DIR / "audit.log", target)
+    if engine == "codex":
+        client.scope_enabled = guard.enabled and codex_target_valid
     if guard.enabled:
         await app.post_event(
             "system", f"[dim]スコープ強制: 有効(認可範囲 {', '.join(guard.scope.raw)})[/dim]"
@@ -590,7 +602,7 @@ async def run_agent(
     await app.post_event(
         "system",
         f"[dim]エージェント開始 — profile={profile.name}, target={target}, "
-        f"model={full_model if _resolve_tier(app) == 'full' else lite_model}, mode={current_mode}[/dim]",
+        f"engine={engine}, model={full_model if _resolve_tier(app) == 'full' else lite_model}, mode={current_mode}[/dim]",
     )
 
     try:
@@ -615,6 +627,8 @@ async def run_agent(
         )
     finally:
         await shell.stop()
+        if engine == "codex":
+            await client.close()
 
 
 async def _run_loop(
@@ -638,6 +652,7 @@ async def _run_loop(
     memory: TargetMemory | None = None,
 ) -> None:
     plugin_map = plugin_map or {}
+    is_codex = getattr(client, "is_codex", False)
     if guard is None:
         guard = ScopeGuard(Scope([]), LOG_DIR / "audit.log", target)
     if memory is None:
@@ -647,11 +662,12 @@ async def _run_loop(
     plugin_ctx = PluginContext(
         target=target, ssh_host=ssh_host, workdir=workdir, run=shell.run
     )
-    _notify_board(app, model=full_model if _resolve_tier(app) == "full" else lite_model)
+    _notify_board(app, provider="codex" if is_codex else "gemini",
+                  model=full_model if _resolve_tier(app) == "full" else lite_model)
     # Re-confirm every MAX_COST increment (0 = never) rather than once at a
     # fixed ceiling, so a long-running task keeps checking in as it burns
     # through further chunks of budget instead of only stopping once.
-    cost_checkpoint = MAX_COST if MAX_COST > 0 else None
+    cost_checkpoint = MAX_COST if MAX_COST > 0 and not is_codex else None
     # Track the memory summary the current config was built with, so a newly
     # discovered port/finding refreshes the system prompt on the next turn.
     memory_sig = memory.summary_for_prompt()
@@ -691,6 +707,8 @@ async def _run_loop(
         # both) changed, so the system prompt keeps carrying the latest recall
         # instead of freezing at whatever it was at startup.
         requested_mode = app.session_state.get("mode", "security")
+        if is_codex:
+            client.mode = requested_mode
         new_memory_sig = memory.summary_for_prompt()
         if requested_mode != current_mode or new_memory_sig != memory_sig:
             if requested_mode != current_mode:
@@ -776,18 +794,22 @@ async def _run_loop(
 
         candidate = response.candidates[0]
 
-        turn_cost = _estimate_cost(response.usage_metadata, turn_model)
-        total_cost += turn_cost
         turn_count += 1
-        _notify_board(app, cost=total_cost, turn_cost=turn_cost, turns=turn_count)
+        if is_codex:
+            _notify_board(app, turns=turn_count)
+        else:
+            turn_cost = _estimate_cost(response.usage_metadata, turn_model)
+            total_cost += turn_cost
+            _notify_board(app, cost=total_cost, turn_cost=turn_cost, turns=turn_count)
         um = response.usage_metadata
-        await app.post_event(
-            "system",
-            f"[dim]turn cost: ${turn_cost:.4f} / total: ${total_cost:.4f} model={turn_model} "
-            f"(in={um.prompt_token_count if um else '?'} "
-            f"out={um.candidates_token_count if um else '?'} "
-            f"thinking={um.thoughts_token_count if um else '?'})[/dim]",
-        )
+        if not is_codex:
+            await app.post_event(
+                "system",
+                f"[dim]turn cost: ${turn_cost:.4f} / total: ${total_cost:.4f} model={turn_model} "
+                f"(in={um.prompt_token_count if um else '?'} "
+                f"out={um.candidates_token_count if um else '?'} "
+                f"thinking={um.thoughts_token_count if um else '?'})[/dim]",
+            )
 
         if cost_checkpoint is not None and total_cost >= cost_checkpoint:
             await app.post_event(
@@ -1073,7 +1095,7 @@ async def _run_loop(
         # wrap up, force one breadth audit before accepting the conclusion — so
         # an early "diagnosis complete" doesn't leave enumerated high-value
         # surfaces untried. Fires at most once per segment (see COVERAGE_NUDGE).
-        if _should_audit_coverage(current_mode, did_work_since_instruction, coverage_audit_done):
+        if not is_codex and _should_audit_coverage(current_mode, did_work_since_instruction, coverage_audit_done):
             await app.post_event(
                 "system",
                 "[bold cyan]⟳ 結論前に攻撃面の網羅を確認する高思考ターンを挟みます[/bold cyan]",

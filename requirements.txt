@@ -4,6 +4,7 @@ Pillow>=10.0.0
 python-dotenv>=1.0.0
 numpy>=1.26.0
 google-genai>=1.0.0
+openai-codex>=0.156.1,<0.157
 # ネイティブデスクトップUI(gui.py)用。OS側のWebViewランタイムを使う
 # (Linux は WebKitGTK か QtWebEngine が別途必要: 例 apt install python3-gi gir1.2-webkit2-4.1)
 pywebview>=5.0

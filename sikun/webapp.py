@@ -161,6 +161,7 @@ class WebApp:
         self.session_state: dict[str, str] = {"mode": start_mode, "effort": "default"}
         self.board: dict[str, Any] = {
             "model": "",
+            "provider": "gemini",
             "cost": 0.0,
             "phase": "-",
             "cwd": "",
@@ -343,7 +344,7 @@ class WebApp:
             self.session_state["effort"] = arg
             await self.post_event(
                 "system",
-                f"[bold green]effort設定: {arg}(次のターンから反映。Geminiバックエンドでは"
+                f"[bold green]effort設定: {arg}(次のターンから反映。現在のエンジンでは"
                 "現状効果なし)[/bold green]",
             )
         elif cmd == "plan":

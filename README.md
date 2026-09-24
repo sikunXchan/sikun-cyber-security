@@ -1,8 +1,26 @@
 # Sikun Cyber Security (SCS)
 
+## Codexで動かす
+
+SCSはCodex SDKを使える環境ではCodexを優先します。ChatGPTで `codex login` 済みなら、Gemini APIキーなしで起動できます。Codexを使う場合の標準モデルは `gpt-6-sol`、軽量モデルは `gpt-6-luna` です。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+codex login
+.\.venv\Scripts\python.exe main.py --engine codex --study
+.\.venv\Scripts\python.exe main.py 127.0.0.1 --engine codex
+```
+
+`gui.py` でも同じ `--engine auto|codex|gemini` を指定できます。`auto` はCodex SDKを優先し、利用できない場合にGeminiを選びます。Geminiを使う場合だけ `GEMINI_API_KEY` を設定してください。モデルは `SIKUN_CODEX_MODEL` と `SIKUN_CODEX_LITE_MODEL` で変更できます。
+
+Codex側が利用できるSCSの操作は `nmap_scan`、`http_probe`、`dir_enum`、`report`、`propose_plan` です。生のbashコマンドやプラグインはCodex側から実行できません。対象を指定した診断モードでのみネットワーク操作を選択でき、対象とプロファイルの `scope` を検査してからSCSが実行します。学習・汎用モードではネットワーク操作は選択できません。認可された対象だけを指定してください。Codex使用時は推定料金を表示しません。
+
+ローカルの動作確認には `python scripts/smoke_codex_runtime.py` を使えます。ループバックHTTPサーバーを起動し、認可範囲内のGETを1回実行して、監査ログと結果を確認します。これは接続と範囲制御のスモークテストであり、攻撃手法全体の検証ではありません。
+
 **認可された対象に対する攻撃的セキュリティ診断(ペネトレーションテスト)を自律的に行うAIエージェント。**
-Gemini API をオーケストレーションの中核に据え、攻撃特化ツール・プラグイン基盤・
-リッチターミナルUIを組み合わせて構築する。安価なLLM + 安全なスキャフォールディングで、
+Codex SDKまたはGemini APIを推論エンジンに使い、攻撃特化ツール・プラグイン基盤・
+リッチターミナルUIを組み合わせて構築する。認可範囲を検査したツール実行で、
 偵察から実証・報告・検知ルール化までを一気通貫で自動化する。
 
 各自が自分専用のエージェントを**プロファイル + プラグイン**で組み立てて拡張できる。
@@ -17,10 +35,10 @@ Gemini API をオーケストレーションの中核に据え、攻撃特化ツ
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # 自分の GEMINI_API_KEY を設定
+cp .env.example .env   # Geminiを使う場合だけGEMINI_API_KEYを設定
 ```
 
-APIキーは各自で用意する(`.env` は Git にコミットされない)。
+Geminiを使う場合のAPIキーは各自で用意する(`.env` は Git にコミットされない)。
 
 WindowsではPython 3.11以降とGit Bashを用意する。PowerShellでは`python -m venv .venv`で環境を作り、`.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt`と`.\.venv\Scripts\python.exe -m pytest -q`でセットアップとテストを行える。アプリはGit Bashの実行ファイルを明示して起動し、Windows標準のWSL起動用`bash.exe`との取り違えを防ぐ。今回確認したのはシェル実行と自動テストであり、GUIの実機表示は別途確認が必要。
 
