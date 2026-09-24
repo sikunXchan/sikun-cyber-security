@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import html
+import os
 import re
 import shlex
+import shutil
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -23,6 +25,15 @@ from sikun.http_checks import inspect_http
 
 MAX_OUTPUT_CHARS = 8000
 UI_PREVIEW_CHARS = 700
+
+
+def _bash_executable() -> str:
+    """Prefer Git Bash on Windows; the system32 bash.exe is a WSL launcher."""
+    if os.name == "nt":
+        git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git" / "bin" / "bash.exe"
+        if git_bash.is_file():
+            return str(git_bash)
+    return shutil.which("bash") or "bash"
 
 
 def preview_for_ui(output: str, max_chars: int = UI_PREVIEW_CHARS) -> str:
@@ -60,7 +71,7 @@ async def run_bash(command: str, cwd: Path, ssh_host: str | None = None,
         stdout, _ = await proc.communicate(input=command.encode())
     else:
         proc = await asyncio.create_subprocess_exec(
-            "bash", "-s",
+            _bash_executable(), "-s",
             cwd=str(cwd),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -107,8 +118,8 @@ class PersistentShell:
                 stderr=asyncio.subprocess.STDOUT,
             )
         else:
-            self._proc = await asyncio.create_subprocess_shell(
-                "bash",
+            self._proc = await asyncio.create_subprocess_exec(
+                _bash_executable(),
                 cwd=str(self.cwd),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,

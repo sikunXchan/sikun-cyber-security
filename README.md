@@ -14,12 +14,15 @@ Gemini API をオーケストレーションの中核に据え、攻撃特化ツ
 ## セットアップ
 
 ```bash
+python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # 自分の GEMINI_API_KEY を設定
 ```
 
 APIキーは各自で用意する(`.env` は Git にコミットされない)。
+
+WindowsではPython 3.11以降とGit Bashを用意する。PowerShellでは`python -m venv .venv`で環境を作り、`.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt`と`.\.venv\Scripts\python.exe -m pytest -q`でセットアップとテストを行える。アプリはGit Bashの実行ファイルを明示して起動し、Windows標準のWSL起動用`bash.exe`との取り違えを防ぐ。今回確認したのはシェル実行と自動テストであり、GUIの実機表示は別途確認が必要。
 
 ## 実行
 
@@ -174,6 +177,8 @@ scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
   範囲外なら**実行前にブロック**(誤検知なし)
 - **生 bash / 未宣言プラグイン** — コマンドから対象を推定するベストエフォート。範囲外
   らしき対象を検出したら**実行前に確認**(安全側の既定は中止)
+- 生コマンド内のHTTP(S) URLは実際の接続先ホストを解析する。認証情報、ポート、IPv6を含むURLでも、
+  認証情報やポートより前の文字列を接続先と誤認しない。
 - **監査ログ** — 触れた対象と許可/ブロックの判定を `logs/audit.log`(JSONL)に追記
 
 > ⚠️ これは**うっかり事故の防止**と**事後追跡(accountability)**のための仕組みで、

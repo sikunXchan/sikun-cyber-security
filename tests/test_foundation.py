@@ -405,7 +405,7 @@ def test_remediate_saves_file():
     )
     saved = PROJECT_ROOT / out["saved_to"]
     try:
-        assert saved.exists() and saved.read_text().startswith("# 修復アドバイス:")
+        assert saved.exists() and saved.read_text(encoding="utf-8").startswith("# 修復アドバイス:")
     finally:
         saved.unlink(missing_ok=True)
 
@@ -523,12 +523,12 @@ def test_mobsf_plugin_digests_report_and_degrades_cleanly():
     with tempfile.TemporaryDirectory() as td:
         script_path = os.path.join(td, "digest.py")
         report_path = os.path.join(td, "report.json")
-        with open(script_path, "w") as f:
+        with open(script_path, "w", encoding="utf-8") as f:
             f.write(mod._DIGEST_PY)
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             json.dump(fake_report, f)
 
-        r = subprocess.run([sys.executable, script_path, report_path, "23"], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, script_path, report_path, "23"], capture_output=True, text=True, encoding="utf-8")
         assert r.returncode == 0
         digest = json.loads(r.stdout)
         assert digest["app_name"] == "VulnBank"
@@ -540,16 +540,16 @@ def test_mobsf_plugin_digests_report_and_degrades_cleanly():
         assert digest["certificate_issues"] == ["Debug certificate used"]
 
         # server-side error passthrough
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             json.dump({"error": "Invalid scan hash"}, f)
-        r = subprocess.run([sys.executable, script_path, report_path, "none"], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, script_path, report_path, "none"], capture_output=True, text=True, encoding="utf-8")
         assert r.returncode == 0
         assert json.loads(r.stdout) == {"error": "Invalid scan hash"}
 
         # malformed/truncated JSON never crashes the script
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             f.write('{"app_name": "X", "trunc')
-        r = subprocess.run([sys.executable, script_path, report_path, "none"], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, script_path, report_path, "none"], capture_output=True, text=True, encoding="utf-8")
         assert r.returncode == 0
         assert "error" in json.loads(r.stdout)
 

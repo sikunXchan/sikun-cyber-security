@@ -51,7 +51,7 @@ def _handle_logs_flag(value: str) -> None:
 def main() -> None:
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Sikun Cyber Security — authorized pentest agent")
+    parser = argparse.ArgumentParser(description="Sikun Cyber Security - authorized pentest agent")
     parser.add_argument("target", nargs="?", help="認可された対象 (IP/ホスト名/URL)")
     parser.add_argument(
         "--profile",

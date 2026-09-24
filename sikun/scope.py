@@ -29,7 +29,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_URL_HOST_RE = re.compile(r"https?://([^\s/:'\"]+)")
+_URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
 
 
 def host_of(target: str) -> str:
@@ -96,9 +96,17 @@ class Scope:
 
 def extract_hosts(command: str) -> list[str]:
     """Best-effort: pull IPs and URL hosts out of a raw shell command.
-    Deliberately conservative (valid IPs + http(s) URLs only) — misses are
-    expected, which is why raw-bash checks confirm rather than hard block."""
-    hosts: list[str] = list(_URL_HOST_RE.findall(command))
+    Parse the whole URL authority so userinfo, ports and IPv6 brackets cannot
+    make an in-scope-looking prefix hide the actual destination. Misses are
+    still possible, so raw-bash checks confirm rather than hard block."""
+    hosts: list[str] = []
+    for match in _URL_RE.finditer(command):
+        try:
+            host = urlparse(match.group().rstrip(".,;)}")).hostname
+        except ValueError:  # malformed bracketed IPv6 or port
+            continue
+        if host:
+            hosts.append(host)
     for candidate in _IP_RE.findall(command):
         try:
             ipaddress.ip_address(candidate)
