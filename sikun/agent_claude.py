@@ -28,7 +28,6 @@ login). The mock experiment in ``experiments/`` does NOT run this worker.
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -234,11 +233,11 @@ class ClaudeWorker:
         )
 
     async def run(self, task: SubTask, upstream: dict[str, WorkerResult]) -> WorkerResult:
-        if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
-            raise RuntimeError(
-                "ClaudeWorker は ANTHROPIC_API_KEY（またはトークン）が必要です。"
-                "認可されたCTF/ラボ標的に対してのみ実行してください。")
-
+        # No API key required: the Agent SDK's query() authenticates via the
+        # environment key OR the `claude` CLI's own login. We don't preflight —
+        # if the CLI isn't authenticated, query() raises and orchestrate()
+        # turns it into an error WorkerResult. Use only against authorized
+        # CTF/lab targets (scope enforcement gates every tool call).
         hints = [h for r in upstream.values() for h in r.next_hints]
         prompt = (
             f"# 担当カテゴリ: {task.category}\n"
@@ -275,3 +274,43 @@ def category_agent(description: str, prompt: str, *, tools: list[str] | None = N
                    model: str | None = None) -> AgentDefinition:
     return AgentDefinition(description=description, prompt=prompt,
                            tools=tools, model=model)
+
+
+# Role line appended to the profile persona for each category worker, so a
+# child stays focused on its slice of the DAG. Kept here (rich-free) so both
+# the TUI engine and the headless benchmark can build the same router.
+CATEGORY_ROLES: dict[str, str] = {
+    "recon": "ネットワーク偵察担当。nmap_scan / http_probe で開放ポート・サービス・Web入口を特定し、根拠付きで報告する。攻撃はしない。",
+    "web": "Web脆弱性調査担当。http_probe / dir_enum と Bash で管理画面・API・認証周りを認可範囲内で調べる。",
+    "crypto": "暗号解析担当。鍵・証明書・暗号設定の弱点を調べる。",
+    "reversing": "リバースエンジニアリング担当。バイナリ/ファームウェアを静的解析する。",
+    "forensics": "フォレンジック担当。ログ・パケット・ダンプ・成果物を解析する。",
+    "pwn": "バイナリエクスプロイト観点の担当。メモリ破壊・権限昇格の観点で認可範囲内に調べる。",
+    "mobile": "モバイルアプリ解析担当。APK/アプリの静的解析を行う。",
+    "misc": "汎用担当。他カテゴリに属さない課題を扱う。",
+}
+
+
+def build_category_router(
+    base_persona: str,
+    guard: ScopeGuard,
+    model: str,
+    plugins: list[ToolPlugin],
+    target: str,
+    ssh_host: str | None,
+    workdir: Path,
+) -> dict[str, "ClaudeWorker"]:
+    """One ClaudeWorker per category (see CATEGORY_ROLES), sharing
+    scope/plugins/core tools. Used by the TUI engine and the benchmark."""
+    from sikun.decompose import WORKER_CATEGORIES
+
+    router: dict[str, ClaudeWorker] = {}
+    for cat in WORKER_CATEGORIES:
+        role = CATEGORY_ROLES.get(cat, "")
+        persona = f"{base_persona.strip()}\n\n# 役割\n{role}" if base_persona.strip() else role
+        router[cat] = ClaudeWorker(
+            category=cat, persona=persona, guard=guard, model=model,
+            allowed_tools=["Bash"], plugins=plugins, target=target,
+            ssh_host=ssh_host, workdir=workdir,
+        )
+    return router

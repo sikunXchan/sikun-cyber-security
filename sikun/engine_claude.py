@@ -40,12 +40,12 @@ from claude_agent_sdk import (
     query,
 )
 
-from sikun.agent_claude import ClaudeWorker, build_agent_options, make_ctx_factory
-from sikun.decompose import WORKER_CATEGORIES, decompose
+from sikun.agent_claude import build_agent_options, build_category_router, make_ctx_factory
+from sikun.decompose import decompose
 from sikun.events import render_tool_call, render_tool_result
 from sikun.orchestrator import orchestrate, synthesize
 from sikun.permission import new_guard
-from sikun.plugins import ToolPlugin, load_plugins
+from sikun.plugins import load_plugins
 from sikun.profile import Profile
 from sikun.prompts import (
     GENERAL_SYSTEM_PROMPT_TEMPLATE,
@@ -56,43 +56,6 @@ from sikun.tools import preview_for_ui
 from sikun.tui import LOG_DIR
 
 DEFAULT_MODEL = "claude-opus-5-5"
-
-# Role line appended to the profile persona for each category worker, so a
-# child stays focused on its slice of the DAG.
-CATEGORY_ROLES: dict[str, str] = {
-    "recon": "ネットワーク偵察担当。nmap_scan / http_probe で開放ポート・サービス・Web入口を特定し、根拠付きで報告する。攻撃はしない。",
-    "web": "Web脆弱性調査担当。http_probe / dir_enum と Bash で管理画面・API・認証周りを認可範囲内で調べる。",
-    "crypto": "暗号解析担当。鍵・証明書・暗号設定の弱点を調べる。",
-    "reversing": "リバースエンジニアリング担当。バイナリ/ファームウェアを静的解析する。",
-    "forensics": "フォレンジック担当。ログ・パケット・ダンプ・成果物を解析する。",
-    "pwn": "バイナリエクスプロイト観点の担当。メモリ破壊・権限昇格の観点で認可範囲内に調べる。",
-    "mobile": "モバイルアプリ解析担当。APK/アプリの静的解析を行う。",
-    "misc": "汎用担当。他カテゴリに属さない課題を扱う。",
-}
-
-
-def _build_router(
-    base_persona: str,
-    guard,
-    model: str,
-    plugins: list[ToolPlugin],
-    target: str,
-    ssh_host: str | None,
-    workdir: Path,
-) -> dict[str, ClaudeWorker]:
-    """One ClaudeWorker per category, sharing scope/plugins/core tools. Each
-    gets the profile persona plus its category role line."""
-    router: dict[str, ClaudeWorker] = {}
-    for cat in WORKER_CATEGORIES:
-        persona = base_persona.strip()
-        role = CATEGORY_ROLES.get(cat, "")
-        persona = f"{persona}\n\n# 役割\n{role}" if persona else role
-        router[cat] = ClaudeWorker(
-            category=cat, persona=persona, guard=guard, model=model,
-            allowed_tools=["Bash"], plugins=plugins, target=target,
-            ssh_host=ssh_host, workdir=workdir,
-        )
-    return router
 
 
 def _build_system_prompt(target: str, mode: str, persona: str) -> str:
@@ -175,12 +138,16 @@ async def run_agent(
     profile: Profile | None = None,
     startup_status: bool = False,
 ) -> None:
+    # Auth: an API key is NOT required. The Agent SDK drives the `claude` CLI,
+    # which authenticates from the environment key OR the CLI's own login
+    # (Claude Code subscription / `claude` profile). When no key is set we warn
+    # and proceed — query() uses the CLI login; it errors clearly if the CLI
+    # isn't logged in.
     if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
         await app.post_event(
             "system",
-            "[bold red]ANTHROPIC_API_KEY が未設定です。.env に設定してから "
-            "--engine claude で起動し直してください。[/bold red]")
-        return
+            "[dim]APIキー未設定 — `claude` CLI のログイン認証で動作します"
+            "(CLI未ログインなら SDK がエラーを返します)。[/dim]")
 
     profile = profile or Profile()
     workdir = workdir or Path.home()
@@ -207,7 +174,7 @@ async def run_agent(
     persona = profile.persona
     ctx_factory = make_ctx_factory(target, ssh_host, workdir)
     scope_list = list(profile.scope) or ([target] if target else [])
-    router = _build_router(persona, guard, model, plugins, target, ssh_host, workdir)
+    router = build_category_router(persona, guard, model, plugins, target, ssh_host, workdir)
     await app.post_event(
         "system",
         f"[dim]Claude エンジン起動(model={model}, target={target}, ssh={ssh_host or 'ローカル'})[/dim]")
