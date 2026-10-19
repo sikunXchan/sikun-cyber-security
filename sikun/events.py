@@ -13,7 +13,7 @@ from typing import Literal
 
 from rich.markup import escape
 
-Channel = Literal["recon", "exploit", "finding", "system"]
+Channel = Literal["recon", "exploit", "finding", "tool", "system"]
 Severity = Literal["critical", "high", "medium", "low", "info"]
 
 # Neon-cyberpunk palette: cyan is the base signal, magenta/pink is impact,
@@ -31,7 +31,15 @@ _CHANNEL_LABEL = {
     "recon": "[bold #00f0ff]▸ RECON[/bold #00f0ff]",
     "exploit": "[bold #b26bff]⚡ EXPLOIT[/bold #b26bff]",
     "finding": "[bold #ff3bd6]✖ FINDING[/bold #ff3bd6]",
+    # Orchestrator worker start/stop lines (▶ task / ◀ task). Without this entry
+    # a "tool"-channel event raised KeyError inside render(), which killed the
+    # TUI's _drain_events worker and silently froze the whole transcript.
+    "tool": "[bold #39d7ff]● TASK[/bold #39d7ff]",
 }
+
+# Any channel the agent emits that we didn't anticipate falls back to this tag
+# instead of crashing the renderer. New producers can add channels freely.
+_CHANNEL_FALLBACK = "[bold #6a7a99]• LOG[/bold #6a7a99]"
 
 
 def render_tool_call(label: str) -> str:
@@ -69,7 +77,8 @@ class AgentEvent:
                 return self.text
             style = _SEVERITY_STYLE[self.severity]
             return f"[{style}]{self.text}[/{style}]"
-        prefix = f"[bold #00f0ff]⏺[/bold #00f0ff] {_CHANNEL_LABEL[self.channel]}[dim #6a7a99] ›[/dim #6a7a99] "
+        label = _CHANNEL_LABEL.get(self.channel, _CHANNEL_FALLBACK)
+        prefix = f"[bold #00f0ff]⏺[/bold #00f0ff] {label}[dim #6a7a99] ›[/dim #6a7a99] "
         if self.severity is not None:
             style = _SEVERITY_STYLE[self.severity]
             return f"{prefix}[{style}]{escape(self.text)}[/{style}]"

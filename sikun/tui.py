@@ -91,10 +91,17 @@ class SikunApp(App):
         self.user_input: asyncio.Queue[str] = asyncio.Queue()
         self._start_time = time.monotonic()
         self._interrupt_event = asyncio.Event()
-        self._blink = False
         self._frame = 0
         self._activity = ""      # non-empty while the agent is working -> spinner
         self._last_sec = -1
+        # Cached widget handles + last-rendered status string. Re-querying the
+        # DOM and repainting the status bar on every timer tick is what made
+        # the hardware cursor (and the IME conversion popup anchored to it)
+        # jump around while typing. We now repaint only when the text actually
+        # changes, and never while the operator is mid-input (see _tick).
+        self._status_widget: Static | None = None
+        self._input_widget: Input | None = None
+        self._last_status = ""
 
         LOG_DIR.mkdir(exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -108,9 +115,13 @@ class SikunApp(App):
         yield Input(placeholder="指示を入力して Enter", id="cmdline")
 
     def on_mount(self) -> None:
-        self.set_interval(0.12, self._tick)
+        # Cache the widgets the status timer touches so _tick never re-queries
+        # the DOM (a per-tick query_one is both wasteful and a refresh trigger).
+        self._status_widget = self.query_one("#status-bar", Static)
+        self._input_widget = self.query_one("#cmdline", Input)
+        self.set_interval(0.15, self._tick)
         self.run_worker(self._startup(), exclusive=False)
-        self.query_one("#cmdline", Input).focus()
+        self._input_widget.focus()
 
     async def _startup(self) -> None:
         log = self.query_one("#transcript", RichLog)
@@ -156,7 +167,9 @@ class SikunApp(App):
             lead = f"[bold #ff2bd6]{spin}[/bold #ff2bd6]"
             tail = f" {sep} [#ffb000]▸ {self._activity}[/#ffb000]"
         else:
-            lead = "[#39ff14]◉[/#39ff14]" if self._blink else "[#124a12]◉[/#124a12]"
+            # Steady (non-blinking) ready indicator. Blinking forced a repaint
+            # twice a second even while idle, which disturbed IME composition.
+            lead = "[#39ff14]◉[/#39ff14]"
             tail = ""
         return (
             f"{lead} [bold #00f0ff]SikunCybersecurity[/bold #00f0ff] {sep} "
@@ -166,15 +179,32 @@ class SikunApp(App):
 
     def _tick(self) -> None:
         self._frame += 1
-        sec = int(time.monotonic() - self._start_time)
-        if self._activity or sec != self._last_sec:
-            self._last_sec = sec
-            self._blink = (self._frame // 4) % 2 == 0
+        if self._activity:
+            # Agent is working (operator is not typing): animate the spinner.
             self._refresh_status()
+            return
+        # Idle: advance the clock at most once per second...
+        sec = int(time.monotonic() - self._start_time)
+        if sec == self._last_sec:
+            return
+        self._last_sec = sec
+        # ...but hold the repaint entirely while the operator is composing in
+        # the input box. Repainting moves the terminal cursor, which drags the
+        # IME conversion window with it and makes it flicker/jump. A frozen
+        # clock for a few seconds of typing is a fair trade for a steady caret.
+        if self._input_widget is not None and self._input_widget.value:
+            return
+        self._refresh_status()
 
     def _refresh_status(self) -> None:
+        if self._status_widget is None:
+            return
+        text = self._status_text()
+        if text == self._last_status:
+            return  # nothing visible changed -> skip the repaint
+        self._last_status = text
         try:
-            self.query_one("#status-bar", Static).update(self._status_text())
+            self._status_widget.update(text)
         except Exception:
             pass
 
@@ -191,7 +221,17 @@ class SikunApp(App):
         while True:
             event = await self.events.get()
             ts = datetime.datetime.now().strftime("%H:%M:%S")
-            transcript.write(f"[#33425c]{ts}[/#33425c] {event.render()}")
+            # Never let a single malformed event (e.g. an unexpected channel)
+            # raise out of this loop: that would kill the worker and silently
+            # freeze the entire transcript. Fall back to the raw text instead.
+            try:
+                body = event.render()
+            except Exception as exc:  # pragma: no cover - defensive
+                body = f"[dim #6a7a99]({type(exc).__name__}) {event.text}[/dim #6a7a99]"
+            try:
+                transcript.write(f"[#33425c]{ts}[/#33425c] {body}")
+            except Exception:
+                transcript.write(f"[#33425c]{ts}[/#33425c] {event.text}")
 
     async def post_event(self, channel: str, text: str, severity: str | None = None) -> None:
         """Push a line into the transcript and mirror it (markup stripped) to
