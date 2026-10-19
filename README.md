@@ -15,8 +15,17 @@ Gemini API をオーケストレーションの中核に据え、攻撃特化ツ
 
 ```bash
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt      # 素の一式(コア: TUI + Gemini エンジン)
 cp .env.example .env   # 自分の GEMINI_API_KEY を設定
+```
+
+依存は `pyproject.toml` に集約済み(Node.js の package.json 相当)。用途別に入れ分けられる:
+
+```bash
+pip install -e .               # コア(TUI + Gemini)
+pip install -e ".[claude]"     # + Claude Agent SDK エンジン(--engine claude)
+pip install -e ".[browser]"    # + browser_fetch(別途 playwright install chromium)
+pip install -e ".[all,dev]"    # 全部 + テスト。`sikun <対象>` コマンドも入る
 ```
 
 APIキーは各自で用意する(`.env` は Git にコミットされない)。
