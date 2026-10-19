@@ -157,6 +157,14 @@ class SikunApp(App):
         if self._input_widget is not None and not self._input_widget.value:
             self.call_after_refresh(self._prime_input)
 
+    def on_app_focus(self, event) -> None:
+        # When the terminal window regains focus the IME re-latches where it
+        # anchors its composition window. Re-prime so the first conversion
+        # after focus (notably the very first one in fullscreen) lands in the
+        # input box rather than the top-left corner. Only while empty.
+        if self._input_widget is not None and not self._input_widget.value:
+            self.call_after_refresh(self._prime_input)
+
     async def _startup(self) -> None:
         log = self.query_one("#transcript", RichLog)
         log.write(banner_renderable())
