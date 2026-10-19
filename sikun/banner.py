@@ -13,8 +13,54 @@ from rich.text import Text
 
 MASCOT_PATH = Path(__file__).parent / "assets" / "mascot.png"
 
-TITLE = "SIKUN CYBER SECURITY"
+TITLE = "SIKUN"                       # drawn big, as block letters
+SUBTITLE_MAIN = "CYBER SECURITY"      # drawn in colored caps under the big title
 SUBTITLE = "authorized attack-exercise agent"
+
+# ---------------------------------------------------------------------------
+# Big block-letter font (dependency-free; avoids pulling in pyfiglet just for
+# the title). Each glyph is 5 rows of '█'/space, padded to a common width when
+# assembled. Covers exactly the letters used by TITLE / SUBTITLE_MAIN so the
+# header can be rendered large like a classic CLI splash.
+# ---------------------------------------------------------------------------
+_BLOCK_FONT: dict[str, list[str]] = {
+    "S": ["█████", "█    ", "█████", "    █", "█████"],
+    "I": ["███", " █ ", " █ ", " █ ", "███"],
+    "K": ["█   █", "█  █ ", "███  ", "█  █ ", "█   █"],
+    "U": ["█   █", "█   █", "█   █", "█   █", "█████"],
+    "N": ["█   █", "██  █", "█ █ █", "█  ██", "█   █"],
+    "C": ["█████", "█    ", "█    ", "█    ", "█████"],
+    "Y": ["█   █", " █ █ ", "  █  ", "  █  ", "  █  "],
+    "B": ["████ ", "█   █", "████ ", "█   █", "████ "],
+    "E": ["█████", "█    ", "███  ", "█    ", "█████"],
+    "R": ["████ ", "█   █", "████ ", "█  █ ", "█   █"],
+    "T": ["█████", "  █  ", "  █  ", "  █  ", "  █  "],
+    " ": ["   ", "   ", "   ", "   ", "   "],
+}
+_BLOCK_ROWS = 5
+
+# Vertical cyan->blue shading per row, echoing the reference splash art.
+_BLOCK_ROW_COLORS = ["#8ad4ff", "#4fb8ff", "#2f9fff", "#1f82e6", "#1566c8"]
+
+
+def _big_text_lines(text: str) -> list[str]:
+    """Assemble `text` into 5 plain rows of block letters (one space between
+    glyphs). Unknown characters are skipped so this never raises."""
+    glyphs = [_BLOCK_FONT[c] for c in text.upper() if c in _BLOCK_FONT]
+    if not glyphs:
+        return [""] * _BLOCK_ROWS
+    rows: list[str] = []
+    for r in range(_BLOCK_ROWS):
+        rows.append("  ".join(g[r] for g in glyphs))
+    return rows
+
+
+def big_title() -> Text:
+    """Rich Text of the big block title, each row shaded top->bottom."""
+    out = Text()
+    for row, color in zip(_big_text_lines(TITLE), _BLOCK_ROW_COLORS):
+        out.append(row + "\n", style=color)
+    return out
 
 
 def _binarize_bw(img: Image.Image, threshold: int = 128) -> Image.Image:
@@ -113,13 +159,11 @@ def _mascot_segments(width: int = 36) -> list[Segment]:
 
 
 def banner_renderable(width: int = 36) -> Group:
-    """Rich renderable combining mascot art + title text — usable in plain
-    console output or embedded inside a Textual widget."""
-    mascot = Text.from_ansi("")
-    mascot._spans = []  # placeholder not used; segments rendered separately
-    title = Text(TITLE, style="bold magenta")
-    subtitle = Text(SUBTITLE, style="dim")
-    return Group(_MascotRenderable(width), title, subtitle)
+    """Rich renderable combining mascot art + the big block title — usable in
+    plain console output or embedded inside a Textual widget."""
+    subtitle_main = Text(SUBTITLE_MAIN, style="bold #ff2bd6")
+    subtitle = Text(SUBTITLE + "\n", style="dim #6a7a99")
+    return Group(_MascotRenderable(width), big_title(), subtitle_main, subtitle)
 
 
 class _MascotRenderable:
@@ -133,7 +177,8 @@ class _MascotRenderable:
 def print_banner(width: int = 36) -> None:
     console = Console()
     console.print(_MascotRenderable(width))
-    console.print(TITLE, style="bold magenta")
+    console.print(big_title())
+    console.print(SUBTITLE_MAIN, style="bold #ff2bd6")
     console.print(SUBTITLE, style="dim")
 
 
