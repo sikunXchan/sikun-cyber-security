@@ -151,24 +151,33 @@ def build_agent_options(
     ``core_tools`` are SDK tools (from ``sikun.claude_core_tools``) and
     ``core_scope`` maps each of their names to a reliable target extractor —
     merged with plugins' ``scope_targets`` so the permission gate hard-blocks
-    out-of-scope calls for both."""
+    out-of-scope calls for both.
+
+    SCOPE ENFORCEMENT — do NOT list a scope-gated tool in ``allowed_tools``.
+    The Agent SDK auto-approves anything in ``allowed_tools`` and then SKIPS
+    ``can_use_tool`` for it (it emits ``CanUseToolShadowedWarning`` and the
+    gate never runs — confirmed in ``claude_agent_sdk/types.py``). So the
+    plugins/core MCP tools and Bash are deliberately left OUT of
+    ``allowed_tools``: they stay available (via ``mcp_servers`` / built-ins)
+    and every call is routed through ``can_use_tool``, which allows in-scope
+    and denies out-of-scope. ``allowed_tools`` is reserved for tools the caller
+    wants auto-approved WITHOUT a scope check — keep it empty unless you mean
+    exactly that."""
     sdk_tools = [plugin_to_sdk_tool(p, ctx_factory) for p in plugins]
     # name -> reliable target extractor, for the permission gate.
     scope_map: dict[str, Callable[[dict[str, Any]], list[str]]] = {
         p.name: p.scope_targets for p in plugins if p.scope_targets}
-    tool_names = [p.name for p in plugins]
     if core_tools:
         sdk_tools += core_tools
-        tool_names += [t.name for t in core_tools]
         if core_scope:
             scope_map.update(core_scope)
 
     mcp_servers: dict[str, Any] = {}
-    allowed = list(allowed_tools)
     if sdk_tools:
         mcp_servers["scs"] = create_sdk_mcp_server("scs", tools=sdk_tools)
-        # SDK MCP tool call names are namespaced "mcp__<server>__<tool>".
-        allowed += [f"mcp__scs__{name}" for name in tool_names]
+    # NOTE: the MCP tool names are intentionally NOT appended to `allowed`,
+    # so can_use_tool governs (and scope-gates) every one of them.
+    allowed = list(allowed_tools)
 
     def extra_declared(tool_name: str, tool_input: dict[str, Any]) -> list[str] | None:
         base = tool_name.split("__")[-1]  # strip mcp__scs__ prefix
@@ -310,7 +319,10 @@ def build_category_router(
         persona = f"{base_persona.strip()}\n\n# 役割\n{role}" if base_persona.strip() else role
         router[cat] = ClaudeWorker(
             category=cat, persona=persona, guard=guard, model=model,
-            allowed_tools=["Bash"], plugins=plugins, target=target,
+            # allowed_tools empty on purpose: Bash and the MCP tools are left
+            # to can_use_tool so scope is actually enforced (see
+            # build_agent_options). Bash stays available as a built-in.
+            allowed_tools=[], plugins=plugins, target=target,
             ssh_host=ssh_host, workdir=workdir,
         )
     return router

@@ -80,16 +80,20 @@ def test_core_scope_extraction():
     assert CORE_SCOPE["nmap_scan"]({}) == []
 
 
-def test_build_agent_options_registers_core_tool_names():
+def test_scope_gated_tools_are_not_in_allowed_tools():
+    # Regression guard: a tool listed in allowed_tools is auto-approved and
+    # SHADOWS can_use_tool (the SDK skips the scope gate for it). So the MCP
+    # core tools must NOT be in allowed_tools — otherwise scope isn't enforced.
     with tempfile.TemporaryDirectory() as d:
         guard = new_guard(["10.13.37.0/24"], Path(d) / "a.log", "10.13.37.10")
         opts = build_agent_options(
-            system_prompt="p", guard=guard, allowed_tools=["Bash"], plugins=[],
+            system_prompt="p", guard=guard, allowed_tools=[], plugins=[],
             ctx_factory=make_ctx_factory("10.13.37.10", None, Path(d)),
             core_tools=core_tools(None), core_scope=CORE_SCOPE)
-    for name in ("mcp__scs__nmap_scan", "mcp__scs__http_probe", "mcp__scs__dir_enum"):
-        assert name in opts.allowed_tools
-    assert "Bash" in opts.allowed_tools
+    for name in ("mcp__scs__nmap_scan", "mcp__scs__http_probe", "mcp__scs__dir_enum", "Bash"):
+        assert name not in opts.allowed_tools, f"{name} shadows can_use_tool"
+    # the tools are still available (registered via the MCP server)
+    assert "scs" in opts.mcp_servers
 
 
 def test_permission_gate_blocks_out_of_scope_core_tool():
