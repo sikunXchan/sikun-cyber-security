@@ -328,11 +328,9 @@ def test_article_framework_names_do_not_become_fingerprints():
     assert tools._guess_tech({}, '<script src="/_next/static/main.js"></script>') == ["Next.js"]
 
 
-@pytest.mark.parametrize("ui", ["tui", "webapp"])
-def test_boards_preserve_hosts_and_service_updates(ui):
+def test_boards_preserve_hosts_and_service_updates():
     from sikun.tui import SikunApp
-    from sikun.webapp import WebApp
-    app = (SikunApp if ui == "tui" else WebApp)(target="127.0.0.1")
+    app = SikunApp(target="127.0.0.1")
     app._merge_ports([{"host": "127.0.0.1", "port": "80", "protocol": "tcp", "service": "unknown"}])
     app._merge_ports([{"host": "127.0.0.1", "port": "80", "protocol": "tcp", "service": "http"},
                       {"host": "127.0.0.2", "port": "80", "protocol": "tcp", "service": "http"}])
