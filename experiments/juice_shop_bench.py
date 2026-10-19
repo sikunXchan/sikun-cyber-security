@@ -97,7 +97,7 @@ async def run_engine(url: str, model: str, scope: list[str],
 def main() -> int:
     ap = argparse.ArgumentParser(description="Benchmark SCS Claude engine on OWASP Juice Shop")
     ap.add_argument("--url", default="http://localhost:3000")
-    ap.add_argument("--model", default="claude-opus-5-5")
+    ap.add_argument("--model", default="claude-opus-4-8")
     ap.add_argument("--scope", default="localhost,127.0.0.1",
                     help="カンマ区切りの認可スコープ")
     ap.add_argument("--instruction", default=None)

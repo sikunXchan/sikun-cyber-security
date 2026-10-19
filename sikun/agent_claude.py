@@ -133,7 +133,7 @@ def build_agent_options(
     allowed_tools: list[str],
     plugins: list[ToolPlugin],
     ctx_factory: Callable[[], PluginContext],
-    model: str = "claude-opus-5-5",
+    model: str = "claude-opus-4-8",
     max_turns: int = 24,
     max_budget_usd: float | None = 2.0,
     workdir: Path | None = None,
@@ -211,7 +211,7 @@ class ClaudeWorker:
     category: str
     persona: str
     guard: ScopeGuard
-    model: str = "claude-opus-5-5"
+    model: str = "claude-opus-4-8"
     allowed_tools: list[str] = field(default_factory=list)
     plugins: list[ToolPlugin] = field(default_factory=list)
     target: str = ""

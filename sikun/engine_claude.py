@@ -55,7 +55,7 @@ from sikun.prompts import (
 from sikun.tools import preview_for_ui
 from sikun.tui import LOG_DIR
 
-DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_MODEL = "claude-opus-4-8"
 
 
 def _build_system_prompt(target: str, mode: str, persona: str) -> str:
