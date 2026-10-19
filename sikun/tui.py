@@ -64,12 +64,13 @@ class SikunApp(App):
 
     #cmdline {
         dock: bottom;
-        border: round #00f0ff;
+        height: 1;
+        padding: 0 1;
+        border: none;
         background: #0a0e1a;
         color: #d7fbff;
-        margin: 0 1 1 1;
     }
-    #cmdline:focus { border: round #ff2bd6; }
+    #cmdline:focus { background: #122238; }
     """
 
     BINDINGS = [
@@ -122,6 +123,39 @@ class SikunApp(App):
         self.set_interval(0.15, self._tick)
         self.run_worker(self._startup(), exclusive=False)
         self._input_widget.focus()
+        # The real terminal cursor starts at the top-left (0,0). Until the first
+        # keystroke moves it into the input box, a Japanese IME composition
+        # anchors at that corner instead of in the box. Re-assert focus and
+        # repaint *after* the first paint so the hardware cursor lands in the
+        # box up front and IME works from the very first character.
+        self.call_after_refresh(self._prime_input)
+
+    def _prime_input(self) -> None:
+        inp = self._input_widget
+        if inp is None:
+            return
+        inp.focus()
+        # Textual computes the caret position correctly from the start, but the
+        # real terminal cursor is only shown/moved once the caret actually
+        # *changes* — the first typed character is normally what does it, which
+        # is why a Japanese IME composition before that lands at the top-left
+        # corner. Briefly move the caret (insert then clear) so that sync fires
+        # up front and IME anchors in the box from the very first character.
+        try:
+            inp.insert_text_at_cursor(" ")
+            inp.value = ""
+            inp.cursor_position = 0
+        except Exception:
+            pass
+        self.refresh()
+
+    def on_resize(self, event) -> None:
+        # Entering/leaving fullscreen resizes the terminal, which can reset the
+        # hardware cursor to the top-left and re-break IME placement. Re-prime
+        # after the resize settles — but only while the box is empty, so we
+        # never disturb text (or an IME composition) already in progress.
+        if self._input_widget is not None and not self._input_widget.value:
+            self.call_after_refresh(self._prime_input)
 
     async def _startup(self) -> None:
         log = self.query_one("#transcript", RichLog)
