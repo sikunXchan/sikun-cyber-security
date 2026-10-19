@@ -1,9 +1,9 @@
 # Sikun Cyber Security (SCS)
 
 **認可された対象に対する攻撃的セキュリティ診断(ペネトレーションテスト)を自律的に行うAIエージェント。**
-Gemini API をオーケストレーションの中核に据え、攻撃特化ツール・プラグイン基盤・
-リッチターミナルUIを組み合わせて構築する。安価なLLM + 安全なスキャフォールディングで、
-偵察から実証・報告・検知ルール化までを一気通貫で自動化する。
+**Claude Agent SDK** をオーケストレーションの中核に据え、親エージェントが指示を DAG に分解して
+カテゴリ別の子ワーカーへ分配する。攻撃特化ツール・プラグイン基盤・最小ターミナルUIを組み合わせ、
+偵察から実証・報告までを自動化する。
 
 各自が自分専用のエージェントを**プロファイル + プラグイン**で組み立てて拡張できる。
 
@@ -13,53 +13,34 @@ Gemini API をオーケストレーションの中核に据え、攻撃特化ツ
 
 ## セットアップ
 
+依存は `pyproject.toml` に集約済み(Node.js の package.json 相当):
+
 ```bash
 source .venv/bin/activate
-pip install -r requirements.txt      # 素の一式(コア: TUI + Gemini エンジン)
-cp .env.example .env   # 自分の GEMINI_API_KEY を設定
-```
-
-依存は `pyproject.toml` に集約済み(Node.js の package.json 相当)。用途別に入れ分けられる:
-
-```bash
-pip install -e .               # コア(TUI + Gemini)
-pip install -e ".[claude]"     # + Claude Agent SDK エンジン(--engine claude)
+pip install -e .               # コア(TUI + Claude エンジン)。SikunCybersecurity コマンドが入る
 pip install -e ".[browser]"    # + browser_fetch(別途 playwright install chromium)
-pip install -e ".[all,dev]"    # 全部 + テスト。`sikun <対象>` コマンドも入る
+pip install -e ".[all,dev]"    # 全部 + テスト
+# 素の pip 派は: pip install -r requirements.txt
+cp .env.example .env           # 任意
 ```
 
-APIキーは各自で用意する(`.env` は Git にコミットされない)。
+**APIキーは不要**:Claude エンジンは `claude` CLI にログイン済みなら動く(API キーを使う場合のみ
+`.env` に `ANTHROPIC_API_KEY` を設定)。
 
 ## 実行
 
 ```bash
-python main.py <対象ホスト>                    # 攻撃診断モード(既定プロファイル)で起動
-python main.py --study                         # 学習・解析モードで起動(対象ホスト不要・毎日使える)
-python main.py <対象ホスト> --profile web       # 自分のプロファイルで起動
-python main.py <対象ホスト> --ssh user@pi       # 対象LAN上のホスト経由でbash実行
-python main.py --logs                          # 過去セッションのログ一覧
+SikunCybersecurity <対象ホスト>                 # 起動(pip install 後。sikun / scs も同じ)
+SikunCybersecurity <対象ホスト> --profile web    # 自分のプロファイルで起動
+SikunCybersecurity <対象ホスト> --ssh user@pi    # 対象LAN上のホスト経由でbash実行
+SikunCybersecurity --logs                       # 過去セッションのログ一覧
+# インストールせず動かすなら: python main.py <対象ホスト>
 ```
 
-3つのモード(セッション中に `/mode` で切替可):
-
-- **`security`(攻撃診断)** — 認可された対象へのペネトレーションテスト。偵察→実証→報告→修復・検知。
-  認可された標的が要るので**たまに使う**「見せ場」
-- **`study`(学習・解析)** — 攻撃せず、CVE/攻撃手法の学習・セキスペ対策・持ち込んだ成果物
-  (コード/設定/難読化スクリプト/ログ/依存)の防御的な静的解析。標的不要で**毎日開ける**常用モード
-- **`general`(汎用)** — セキュリティに限らない一般的な作業アシスタント
-
-## 推論バックエンド(`--engine`)
-
-TUI は同じまま、推論バックエンドを切り替えられる。
-
-```bash
-python main.py <対象ホスト> --engine gemini   # 既定: Gemini API
-python main.py <対象ホスト> --engine claude   # Claude Agent SDK(ANTHROPIC_API_KEY が必要)
-```
-
-`--engine claude` では、親エージェントが指示を分解(DAG)し、カテゴリ別の子ワーカーへ
-分配するオーケストレータ構成で動く(`sikun/orchestrator.py` / `sikun/engine_claude.py`)。
-scope 強制・監査ログは Gemini エンジンと同じ(`sikun/scope.py` → SDK の permission)。
+ユーザー指示は親エージェントが DAG に分解し、カテゴリ別ワーカーが並列/逐次で実行して統合報告する
+(`sikun/orchestrator.py` / `sikun/engine_claude.py`)。scope 強制・監査ログは SDK の permission ゲートで効く
+(`sikun/scope.py` / `sikun/permission.py`)。TUI は単一トランスクリプト+入力欄の最小構成。
+`Esc`=中断、`Ctrl+C`=終了、`/clear`=画面消去、`/quit`=終了。
 
 ## 自分専用エージェントの作り方
 
@@ -182,21 +163,21 @@ scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
 
 ## 構成
 
-- `main.py` — CLIエントリ(`--profile` / `--init` / `--ssh` / `--logs` / `--engine`)
-- `sikun/agent_gemini.py` — Gemini エンジン(Gemini tool-use ループ・永続シェル・thinking配分・構造化ツール・永続メモリ・行き詰まり検知による戦略の自己修正・結論前の攻撃面の網羅チェック)
-- `sikun/engine_claude.py` — Claude エンジン(Claude Agent SDK。TUIから `--engine claude` で選択。指示を分解してオーケストレータで実行)
+- `main.py` — CLIエントリ(`--profile` / `--init` / `--ssh` / `--task` / `--logs`)
+- `sikun/engine_claude.py` — Claude エンジン(Claude Agent SDK。指示を分解してオーケストレータで実行)
 - `sikun/orchestrator.py` — オーケストレータ=ワーカー中核(DAG分解・層ごと並列・結果統合)
 - `sikun/agent_claude.py` — Claude ワーカー + オプション構築(プラグイン/コアツールのMCP化・scope permission・effort)
 - `sikun/claude_core_tools.py` — nmap_scan / http_probe / dir_enum を Claude の MCP ツール化
 - `sikun/claude_browser_tool.py` — browser_fetch(headless Chromium、DOM/JS依存のWeb課題向け・任意依存 playwright)
 - `sikun/decompose.py` — ユーザー指示 → SubTask の DAG への分解(単一カテゴリは分割しない保守的分解)
-- `sikun/prompts.py` — システムプロンプト・テンプレート(security / general モード)
+- `sikun/permission.py` — scope 強制(SDK の `can_use_tool` へ移植)+ 監査ログ
+- `sikun/prompts.py` — システムプロンプト(認可された攻撃診断・単一)
 - `sikun/tools.py` — 永続シェル + 構造化ツール実装(nmap_scan / http_probe / dir_enum)
 - `sikun/plugins.py` — **プラグイン基盤**(自作ツールの自動読み込み)
 - `sikun/profile.py` — **エージェント・プロファイル**(TOML設定)
 - `sikun/scaffold.py` — `--init` の雛形生成
-- `sikun/memory.py` — ターゲット別の永続メモリ(セッション間でポート/finding を継続)
-- `sikun/tui.py` — Textual製リッチUI(トランスクリプト + 戦況ボード)
+- `sikun/memory.py` — ターゲット別の永続メモリ
+- `sikun/tui.py` — Textual製の最小UI(単一トランスクリプト + 入力欄)
 - `profiles/` — エージェント・プロファイル(TOML)
 - `plugins/` — 自作ツール(プラグイン)
 
@@ -212,11 +193,10 @@ pip install -r requirements-dev.txt && pytest
 APIキーや外部の攻撃対象は不要。HTTP統合テストはループバックの模擬サーバーと bash/curl を使用する
 (未導入なら該当テストはskip)。Windowsでは `PYTHONUTF8=1` を設定して全体テストを実行できる。
 
-## セッション中のコマンド
+## セッション中のキー / コマンド
 
-入力欄で使えるスラッシュコマンド:
-
-- `/mode security|study|general` — 攻撃診断 / 学習・解析 / 汎用アシスタント
-- `/model lite|full` — 軽量モデル / 通常モデル(Gemini)
-- `/plan` — 次のタスクで計画提示を強制
 - `Esc` — 実行中のターンを中断
+- `Ctrl+C` — 終了
+- `/clear` — 画面(トランスクリプト)を消去
+- `/quit` — 終了
+- それ以外の入力はそのまま指示になる

@@ -7,7 +7,7 @@ module-level ``PLUGIN`` (one :class:`ToolPlugin`) or ``PLUGINS`` (a list of
 them). At startup the active profile's plugin dirs are scanned, every such
 file imported, and each ToolPlugin handed to the model as a callable tool —
 schema advertising, dispatch, and result routing are all done by the existing
-agent loop. No edits to ``agent_gemini.py`` / ``tools.py`` are required to add
+agent loop. No edits to the engine / ``tools.py`` are required to add
 a tool; that is the whole point.
 
 A plugin's ``run(args, ctx)`` gets the model-supplied arguments plus a

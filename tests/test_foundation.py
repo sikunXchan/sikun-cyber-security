@@ -125,31 +125,6 @@ def test_http_probe_surfaces_server_version():
     assert result["x_powered_by"] == "PHP/7.4.3"
 
 
-def test_tui_board_tracks_state():
-    async def run():
-        app = SikunApp(target="192.168.56.10", profile_name="default")
-        async with app.run_test() as pilot:
-            app.update_board(
-                model="gemini-3.5-flash",
-                cost=0.1234,
-                ports=[
-                    {"port": "22", "protocol": "tcp", "service": "ssh"},
-                    {"port": "80", "protocol": "tcp", "service": "http"},
-                ],
-            )
-            app.update_board(ports=[{"port": "22", "protocol": "tcp", "service": "ssh"}])
-            await app.post_event("finding", "SQLi 認証バイパス", "high")
-            await app.post_event("recon", "port 22 open")
-            await pilot.pause()
-            assert len(app.board["ports"]) == 2
-            assert app.board["findings"]["high"] == 1
-            assert app.board["phase"] == "recon"
-            app._board_renderable()  # must not raise
-            assert "gemini-3.5-flash" in app._status_text()
-
-    asyncio.run(run())
-
-
 def test_scope_matching():
     s = Scope(["10.20.0.0/24", "192.168.56.10", "shop.example.local"])
     assert s.enabled
@@ -578,108 +553,6 @@ def test_mobsf_plugin_digests_report_and_degrades_cleanly():
         os.environ.pop("MOBSF_API_KEY", None)
 
 
-def test_study_mode_selects_learning_prompt_and_forbids_attacks():
-    # /mode study (the daily-driver) must pick the study template — learning +
-    # defensive analysis, explicitly no remote attacks and no executing
-    # untrusted code — not the offensive or general one.
-    import sikun.agent_gemini as ag
-
-    sec = ag._build_config("x", "security").system_instruction
-    study = ag._build_config("x", "study").system_instruction
-    general = ag._build_config("x", "general").system_instruction
-
-    assert study != sec and study != general
-    assert "学習" in study and "解析" in study
-    # the safety spine: no attacks, never run suspicious code, redirect to security
-    assert "実行しない" in study and "/mode security" in study
-    # unknown mode still falls back to the general assistant (no crash)
-    assert ag._build_config("x", "banana").system_instruction == general
-
-
-def test_selfcheck_parsers_classify_status():
-    # The --status sweep's parsers must turn raw command output into a
-    # (status, detail) verdict — and never raise on odd/empty input (a startup
-    # screen that crashes is worse than one that says "SKIP").
-    from sikun import selfcheck as sc
-
-    # strips the persistent shell's [exit=N] prefix
-    assert sc._clean("[exit=0]\n22 80 443") == "22 80 443"
-
-    assert sc._p_ports("[exit=0]\n22 80 443")[0] == "INFO"
-    assert sc._p_firewall("Status: active")[0] == "OK"
-    assert sc._p_firewall("Status: inactive")[0] == "WARN"
-    assert sc._p_firewall("__NOUFW__")[0] == "INFO"
-    assert sc._p_failed_logins("0")[0] == "OK"
-    assert sc._p_failed_logins("42")[0] == "WARN"      # many failures -> flag
-    assert sc._p_failed_logins("na")[0] == "SKIP"
-    assert sc._p_disk_load("2% 0.00")[0] == "OK"
-    assert sc._p_disk_load("95% 3.2")[0] == "WARN"     # nearly full -> flag
-    assert sc._p_updates("0 0")[0] == "OK"
-    assert sc._p_updates("8 3")[0] == "WARN"           # security updates pending -> flag
-    # none of the parsers raise on empty/garbage
-    for fn in (sc._p_ports, sc._p_firewall, sc._p_failed_logins, sc._p_disk_load,
-               sc._p_updates, sc._p_suid, sc._p_docker, sc._p_sessions):
-        assert isinstance(fn(""), tuple) and len(fn("")) == 2
-
-
-def test_coverage_gate_fires_once_after_work_in_security_mode():
-    # The coverage gate forces one breadth audit before the agent may conclude,
-    # but only when it actually did attack work this segment, only in security
-    # mode, and never twice for the same segment (no loop, no Q&A false-fire).
-    import sikun.agent_gemini as ag
-
-    assert ag._should_audit_coverage("security", True, False) is True  # worked, not yet audited
-    assert ag._should_audit_coverage("security", True, True) is False  # already audited -> no re-fire
-    assert ag._should_audit_coverage("security", False, False) is False  # no work -> pure Q&A, skip
-    assert ag._should_audit_coverage("general", True, False) is False  # not an attack engagement
-    # the nudge is breadth-oriented and explicitly permits 保留 (no runaway)
-    assert "網羅" in ag.COVERAGE_NUDGE and "保留" in ag.COVERAGE_NUDGE
-
-
-def test_report_tool_has_evidence_field():
-    # finding verification loop: the report tool must accept an `evidence` arg
-    import sikun.agent_gemini as ag
-
-    params = ag.REPORT_DECLARATION.parameters
-    props = params["properties"] if isinstance(params, dict) else params.properties
-    assert "evidence" in props
-
-
-def test_turn_productivity_detection_drives_self_correction():
-    # The stall detector that triggers a re-plan turn: progress resets the
-    # streak, a flailing (empty/error) tool turn counts as unproductive.
-    from types import SimpleNamespace
-
-    from sikun.agent_gemini import _turn_was_productive
-
-    def call(name, **args):
-        return SimpleNamespace(function_call=SimpleNamespace(name=name, args=args), function_response=None)
-
-    def resp(name, response):
-        return SimpleNamespace(function_call=None, function_response=SimpleNamespace(name=name, response=response))
-
-    # productive signals
-    assert _turn_was_productive([call("report", channel="finding", evidence="observed response")], [])
-    assert not _turn_was_productive([call("report", channel="finding")], [])
-    assert _turn_was_productive([], [resp("nmap_scan", {"open_ports": [{"port": 22}]})])
-    assert _turn_was_productive([], [resp("dir_enum", {"found": [{"path": "/admin"}]})])
-    assert _turn_was_productive([], [resp("http_probe", {"status": "200"})])
-    assert _turn_was_productive([], [resp("bash", {"output": "x" * 60})])
-    # unproductive: no new ports, a 404, a short/errored shell
-    assert not _turn_was_productive(
-        [],
-        [
-            resp("nmap_scan", {"open_ports": []}),
-            resp("http_probe", {"status": "404"}),
-            resp("bash", {"output": "", "error": "connection refused"}),
-        ],
-    )
-    # long BUT failing shell output is a flail, not progress
-    assert not _turn_was_productive(
-        [], [resp("bash", {"output": "curl: (7) Failed to connect to host: Connection refused\n" * 2})]
-    )
-
-
 def test_privesc_enum_parses_and_flags_notable():
     from sikun.plugins import _import_file
 
@@ -743,30 +616,6 @@ def test_dir_enum_wordlist_expanded_for_discovery():
 
     for path in ("main.js.map", "metrics", "api-docs", ".git/HEAD"):
         assert path in _DEFAULT_DIR_WORDLIST, path
-
-
-def test_builtin_tools_match_prompt_advertised_tools():
-    """SYSTEM_PROMPT_TEMPLATE tells the model to prefer nmap_scan/http_probe/
-    dir_enum over raw bash and to feed cve_lookup from them. That's a lie if the
-    backend doesn't actually register those tools — a gap that shipped once. Pin
-    the built-in tool names so the prompt and the registered tools can't drift."""
-    from sikun import agent_gemini
-
-    names = {d.name for d in agent_gemini.TOOLS.function_declarations}
-    for advertised in ("bash", "report", "nmap_scan", "http_probe", "dir_enum", "propose_plan"):
-        assert advertised in names, (advertised, names)
-
-
-def test_model_tier_defaults_to_lite():
-    from sikun.agent_gemini import _resolve_tier
-
-    class _FakeApp:
-        def __init__(self, state: dict) -> None:
-            self.session_state = state
-
-    assert _resolve_tier(_FakeApp({})) == "lite"
-    assert _resolve_tier(_FakeApp({"model": "full"})) == "full"
-    assert _resolve_tier(_FakeApp({"model": "lite"})) == "lite"
 
 
 def test_target_memory_persists_and_summarizes():

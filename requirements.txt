@@ -3,9 +3,9 @@ rich>=13.7.0
 Pillow>=10.0.0
 python-dotenv>=1.0.0
 numpy>=1.26.0
-google-genai>=1.0.0
+claude-agent-sdk>=0.2.0
 # metasploit プラグイン用(RPC連携)。Metasploit本体(metasploit-framework)は別途OS側で導入する
 pymetasploit3>=1.0.0
-# 任意: Claudeエンジンのブラウザツール(browser_fetch)用。DOM/JS依存のWeb課題向け。
+# 任意: ブラウザツール(browser_fetch)用。DOM/JS依存のWeb課題向け。
 # 使うなら: pip install playwright && playwright install chromium
 # playwright>=1.40.0

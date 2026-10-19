@@ -1,6 +1,6 @@
 """Shell execution and structured recon tools for the agent loop.
 
-The agent's tool *schemas* live with the agent backend (sikun.agent_gemini);
+The agent exposes these via sikun.claude_core_tools (Claude MCP tools);
 this module holds the implementations they call: a long-lived PersistentShell
 for bash, and the structured recon runners (nmap_scan / http_probe / dir_enum)
 that parse tool output into typed results instead of handing the model raw

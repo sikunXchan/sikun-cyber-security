@@ -256,30 +256,6 @@ def test_invalid_discovery_input_never_executes(url, wordlist):
         bash.assert_not_called()
 
 
-@pytest.mark.parametrize("evidence", [None, "", "  \n ", 42])
-def test_unverified_report_never_reaches_finding_board_or_memory(evidence, tmp_path):
-    from types import SimpleNamespace
-    from sikun.agent_gemini import _record_report
-    from sikun.memory import TargetMemory
-    app = SimpleNamespace(post_event=AsyncMock())
-    memory = TargetMemory("example.test", tmp_path / "memory.json")
-    result = asyncio.run(_record_report(app, memory, {"channel": "finding", "text": "claim", "evidence": evidence}))
-    assert result["error"] and not memory.findings
-    assert not memory.path.exists()
-    assert all(c.args[0] != "finding" for c in app.post_event.call_args_list)
-
-
-def test_evidenced_report_is_saved(tmp_path):
-    from types import SimpleNamespace
-    from sikun.agent_gemini import _record_report
-    from sikun.memory import TargetMemory
-    app = SimpleNamespace(post_event=AsyncMock())
-    memory = TargetMemory("example.test", tmp_path / "memory.json")
-    result = asyncio.run(_record_report(app, memory, {"channel": "finding", "text": "claim", "evidence": "GET / returned observed content"}))
-    assert result == {"result": "ok"} and memory.path.exists()
-    assert memory.findings[0]["evidence"] == "GET / returned observed content"
-
-
 def test_service_memory_enriches_ports_and_preserves_distinct_hosts(tmp_path):
     from sikun.memory import TargetMemory
     memory = TargetMemory("127.0.0.1", tmp_path / "memory.json")
@@ -326,15 +302,6 @@ def test_article_framework_names_do_not_become_fingerprints():
     assert tools._guess_tech({}, "An article comparing Django, Express and Next.js") == []
     assert tools._guess_tech({"X-Powered-By": "Express"}, "") == ["Express/Node.js"]
     assert tools._guess_tech({}, '<script src="/_next/static/main.js"></script>') == ["Next.js"]
-
-
-def test_boards_preserve_hosts_and_service_updates():
-    from sikun.tui import SikunApp
-    app = SikunApp(target="127.0.0.1")
-    app._merge_ports([{"host": "127.0.0.1", "port": "80", "protocol": "tcp", "service": "unknown"}])
-    app._merge_ports([{"host": "127.0.0.1", "port": "80", "protocol": "tcp", "service": "http"},
-                      {"host": "127.0.0.2", "port": "80", "protocol": "tcp", "service": "http"}])
-    assert len(app.board["ports"]) == 2 and app.board["ports"][0]["service"] == "http"
 
 
 def test_nvd_shell_parser_accepts_pretty_json_and_ignores_reference_ids(local_site):
