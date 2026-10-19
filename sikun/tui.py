@@ -1,9 +1,8 @@
-"""Sikun Cyber Security — rich terminal UI.
+"""Sikun Cyber Security — minimal terminal UI.
 
-Layout mirrors Claude Code's CLI: one linear scrolling transcript (recon,
-exploit, findings, tool calls/results, and operator input all interleaved
-in real chronological order — not split into separate panes) plus a slim
-status line and a bottom input box.
+Claude-Code-like: one linear scrolling transcript, a slim status line, and a
+bottom input box. No sidebar, no cost readout, no modes, no startup theatre —
+just the banner once, then the conversation.
 """
 
 from __future__ import annotations
@@ -17,8 +16,7 @@ from typing import Any, Coroutine, TypeVar
 
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal
-from textual.widgets import Button, Input, RichLog, Static
+from textual.widgets import Input, RichLog, Static
 
 from sikun.banner import banner_renderable
 from sikun.events import AgentEvent
@@ -30,29 +28,19 @@ LOG_DIR = PROJECT_ROOT / "logs"
 
 T = TypeVar("T")
 
-_BOARD_SEV_ORDER = ("critical", "high", "medium", "low", "info")
-_BOARD_SEV_COLOR = {
-    "critical": "bold #ffffff on #ff0059",
-    "high": "bold #ff3bd6",
-    "medium": "bold #ffb000",
-    "low": "#00f0ff",
-    "info": "dim #6a7a99",
-}
-
 
 class Interrupted(Exception):
     """Raised by SikunApp.run_interruptible() when the operator presses Esc
-    mid-call — mirrors Claude Code's Esc-to-stop behavior for a runaway/
-    long-running turn, or one queued by an accidental Enter."""
+    mid-call — Esc-to-stop for a runaway/long-running turn."""
 
 
 class SikunApp(App):
+    # Disable Textual's built-in command palette: it is an unexpected overlay
+    # (and a source of the "screen goes blank" surprise on stray key combos).
+    ENABLE_COMMAND_PALETTE = False
+
     CSS = """
-    /* --- neon cyberpunk skin: cyan base signal, magenta impact, near-black bg --- */
-    Screen {
-        layout: vertical;
-        background: #05060a;
-    }
+    Screen { layout: vertical; background: #05060a; }
 
     #status-bar {
         height: 1;
@@ -60,10 +48,6 @@ class SikunApp(App):
         background: #0a0e1a;
         color: #00f0ff;
         text-style: bold;
-    }
-
-    #main-row {
-        height: 1fr;
     }
 
     #transcript {
@@ -78,24 +62,6 @@ class SikunApp(App):
         scrollbar-background: #0a0e1a;
     }
 
-    #sidebar {
-        width: 34;
-        height: 1fr;
-        padding: 0 1;
-        border-left: solid #ff2bd6;
-        background: #05060a;
-        color: #c7f5ff;
-    }
-
-    #bootline {
-        dock: bottom;
-        height: auto;
-        padding: 0 2;
-        color: #00f0ff;
-        background: #05060a;
-        display: none;
-    }
-
     #cmdline {
         dock: bottom;
         border: round #00f0ff;
@@ -103,21 +69,7 @@ class SikunApp(App):
         color: #d7fbff;
         margin: 0 1 1 1;
     }
-
-    #cmdline:focus {
-        border: round #ff2bd6;
-    }
-
-    #choice-bar {
-        height: 3;
-        margin: 0 1;
-        align: center middle;
-        display: none;
-    }
-
-    #choice-bar Button {
-        margin: 0 1;
-    }
+    #cmdline:focus { border: round #ff2bd6; }
     """
 
     BINDINGS = [
@@ -130,43 +82,19 @@ class SikunApp(App):
         target: str = "(未設定)",
         agent_factory: AgentFactory | None = None,
         profile_name: str = "default",
-        start_mode: str = "security",
-        cinematic: bool = False,
     ) -> None:
         super().__init__()
         self.target = target
-        self.cinematic = cinematic  # --autostart: dramatic fullscreen-style intro
         self.agent_factory = agent_factory
         self.profile_name = profile_name
         self.events: asyncio.Queue[AgentEvent] = asyncio.Queue()
         self.user_input: asyncio.Queue[str] = asyncio.Queue()
         self._start_time = time.monotonic()
-        # Live "situation board" shown in the right sidebar. Backends push into
-        # it via update_board(); finding counts/phase are derived in post_event.
-        self.board: dict[str, Any] = {
-            "model": "",
-            "cost": 0.0,
-            "phase": "-",
-            "cwd": "",           # live shell cwd (from PersistentShell.cwd_live)
-            "last_cmd": "",      # last bash command run
-            "turns": 0,          # model turns this session
-            "tools": 0,          # tool calls this session
-            "cost_history": [],  # per-turn cost, for the sparkline
-            "ports": [],
-            "findings": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0},
-        }
-        # Mutable session controls, changed live via slash commands (/mode, /effort).
-        # The agent loop polls this dict each turn rather than being handed a
-        # one-shot config, so a switch takes effect on the *next* turn without
-        # restarting the session.
-        self.session_state: dict[str, str] = {"mode": start_mode, "effort": "default"}
-        self._choice_future: asyncio.Future[str] | None = None
         self._interrupt_event = asyncio.Event()
-        self._blink = False  # drives the blinking "live" glyph in the status bar
-        self._boot_done = False
-        self._frame = 0          # animation frame counter (spinner / blink)
-        self._activity = ""      # non-empty while the agent is working -> status spinner
-        self._last_sec = -1      # throttle idle status repaints to ~1/s (IME-friendly)
+        self._blink = False
+        self._frame = 0
+        self._activity = ""      # non-empty while the agent is working -> spinner
+        self._last_sec = -1
 
         LOG_DIR.mkdir(exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -176,178 +104,37 @@ class SikunApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static(self._status_text(), id="status-bar")
-        with Horizontal(id="main-row"):
-            yield RichLog(id="transcript", markup=True, wrap=True, highlight=False, auto_scroll=True)
-            yield Static(id="sidebar")
-        yield Horizontal(id="choice-bar")
-        yield Static(id="bootline")  # typewriter scratch line, shown only during boot
-        yield Input(
-            placeholder="指示を入力して Enter (/mode, /effort, /plan, /model)", id="cmdline"
-        )
+        yield RichLog(id="transcript", markup=True, wrap=True, highlight=False, auto_scroll=True)
+        yield Input(placeholder="指示を入力して Enter", id="cmdline")
 
     def on_mount(self) -> None:
-        self._refresh_sidebar()
-        self.set_interval(0.12, self._tick)  # spins the activity indicator; throttled at idle
-        # Boot animation first, then wire up the live event drain + agent. Keeping
-        # them behind the boot worker means the cinematic sequence isn't racing
-        # the agent's first "指示待ち" line into the transcript.
+        self.set_interval(0.12, self._tick)
         self.run_worker(self._startup(), exclusive=False)
         self.query_one("#cmdline", Input).focus()
 
     async def _startup(self) -> None:
-        if self.cinematic:
-            await self._cinematic_intro()
-        else:
-            await self._boot_sequence()
+        log = self.query_one("#transcript", RichLog)
+        log.write(banner_renderable())
+        log.write(RichText.from_markup(f"[dim #6a7a99]session log: {self._log_path}[/dim #6a7a99]\n"))
         self.run_worker(self._drain_events(), exclusive=False)
         if self.agent_factory is not None:
             self.run_worker(self.agent_factory(self), exclusive=False)
-
-    async def _type(self, text: str, style: str, commit: str | None = None, cps: float = 0.022) -> None:
-        """Typewriter: reveal `text` char-by-char in the bottom boot line, then
-        commit a (possibly richer-markup) finished line into the transcript.
-        RichLog can't edit a line in place, so the live typing happens in a
-        dedicated Static (#bootline) and only the finished line is logged."""
-        boot = self.query_one("#bootline", Static)
-        boot.display = True
-        shown = ""
-        for ch in text:
-            shown += ch
-            boot.update(f"[{style}]{shown}[/{style}]▮")
-            await asyncio.sleep(cps)
-        boot.update(f"[{style}]{shown}[/{style}]")
-        await asyncio.sleep(0.04)
-        self.query_one("#transcript", RichLog).write(
-            RichText.from_markup(commit if commit is not None else f"[{style}]{text}[/{style}]")
-        )
-        boot.update("")
-        boot.display = False
-
-    async def _boot_sequence(self) -> None:
-        """Cinematic startup: scanline rule, typed boot banner, per-module [OK]
-        rolls, target lock — then the mascot. Pure eye-candy; writes directly to
-        the transcript (not via the event queue)."""
-        log = self.query_one("#transcript", RichLog)
-        rule = "[#123]" + "▚" * 60 + "[/#123]"
-
-        log.write(RichText.from_markup(rule))
-        await asyncio.sleep(0.35)
-        await self._type(
-            "◈ SIKUN CYBER SECURITY // offensive core",
-            "bold #00f0ff",
-            commit="[bold #00f0ff]◈ SIKUN CYBER SECURITY[/bold #00f0ff] [dim #6a7a99]// offensive core[/dim #6a7a99]",
-        )
-        await asyncio.sleep(0.25)
-        await self._type("initializing neural-offensive subsystem", "dim #7fa8bf",
-                         commit="[#7fa8bf]  initializing neural-offensive subsystem ...[/#7fa8bf] [bold #39ff14][OK][/bold #39ff14]")
-        await asyncio.sleep(0.3)
-
-        # module roll — real plugin/subsystem names so it reads as genuine
-        for name in ("scope-guard", "persistent-shell", "target-memory", "plugin-loader", "gemini-link"):
-            await asyncio.sleep(0.22)
-            log.write(RichText.from_markup(
-                f"[#b26bff]  ▸[/#b26bff] mount [#00f0ff]{name}[/#00f0ff] "
-                f"[dim #6a7a99]{'.' * (18 - len(name))}[/dim #6a7a99] [bold #39ff14][OK][/bold #39ff14]"
-            ))
-        await asyncio.sleep(0.4)
-
-        await self._type(
-            f"target locked: {self.target}",
-            "bold #ff3bd6",
-            commit=f"[bold #ff3bd6]⌖ target locked:[/bold #ff3bd6] [#ff9be8]{self.target}[/#ff9be8]",
-            cps=0.04,
-        )
-        await asyncio.sleep(0.45)
-        log.write(RichText.from_markup(rule))
-        log.write(banner_renderable())
-        log.write(RichText.from_markup(f"[dim #6a7a99]session log: {self._log_path}[/dim #6a7a99]\n"))
-        self._boot_done = True
-
-    async def _cinematic_intro(self) -> None:
-        """--autostart's dramatic opener: a cascade of glyphs, a glitched title
-        slam, a fast subsystem roll, then the mascot — the "jacking in" moment
-        before the morning sweep runs. Pure theatre; honest payoff is the sweep.
-        Framed as the operator coming online, not a real breach."""
-        import random
-
-        log = self.query_one("#transcript", RichLog)
-        width = min(getattr(self.size, "width", 80) or 80, 110)
-
-        # 1) rushing data cascade — a big wall of meaningless (English) code-ish
-        # noise: hex, fake asm, symbols. Pure atmosphere.
-        _REGS = ("rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9",
-                 "r10", "r11", "eax", "ebx", "ecx", "edx")
-        _OPS = ("mov", "xor", "jmp", "call", "push", "pop", "lea", "add", "sub", "and",
-                "or", "test", "cmp", "shl", "shr", "ret", "nop", "int", "syscall", "inc", "dec")
-        _SYM = ("::", "//", ">>", "<<", "->", "==", "!=", "0x", "##", "&&", "||", "[]", "{}", "|")
-
-        def _tok() -> str:
-            r = random.random()
-            if r < 0.34:
-                return "%02x" % random.randint(0, 255)
-            if r < 0.55:
-                return "%s %s,%s" % (random.choice(_OPS), random.choice(_REGS), random.choice(_REGS))
-            if r < 0.72:
-                return "0x%06x" % random.randint(0, 0xFFFFFF)
-            if r < 0.86:
-                return random.choice(_OPS)
-            return random.choice(_SYM)
-
-        def _line(w: int) -> str:
-            parts, ln = [], 0
-            while ln < w:
-                t = _tok()
-                parts.append(t)
-                ln += len(t) + 1
-            return " ".join(parts)[:w]
-
-        for _ in range(30):
-            col = "#0c5566" if random.random() > 0.12 else "#7a1e5a"  # dim cyan, magenta flecks
-            log.write(RichText.from_markup(f"[{col}]{_line(width)}[/{col}]"))
-            await asyncio.sleep(0.022)
-
-        # 2) glitched title slam (offset ghosts, then the clean line)
-        for dx, col in ((2, "#ff2bd6"), (-1, "#00f0ff")):
-            pad = " " * max(0, dx)
-            log.write(RichText.from_markup(f"[{col}]{pad}▛▀ S C S ▀▜  neural link[/{col}]"))
-            await asyncio.sleep(0.05)
-        log.write(RichText.from_markup("[bold #00f0ff]▛▀ S C S ▀▜[/bold #00f0ff] [bold #ff2bd6]NEURAL LINK ESTABLISHED[/bold #ff2bd6]"))
-        await asyncio.sleep(0.35)
-
-        # 3) fast subsystem online roll
-        for name in ("crypto-core", "scope-guard", "persistent-shell", "target-memory",
-                     "plugin-loader", "gemini-link", "sensor-grid"):
-            log.write(RichText.from_markup(
-                f"[#b26bff] ▸[/#b26bff] [#00f0ff]{name}[/#00f0ff] "
-                f"[dim #6a7a99]{'.' * (16 - len(name))}[/dim #6a7a99] [bold #39ff14]ONLINE[/bold #39ff14]"
-            ))
-            await asyncio.sleep(0.07)
-        await asyncio.sleep(0.25)
-
-        log.write(RichText.from_markup("[bold #39ff14]◈ OPERATOR ONLINE[/bold #39ff14] [dim #6a7a99]— jacking in ...[/dim #6a7a99]"))
-        await asyncio.sleep(0.3)
-        log.write(banner_renderable())
-        log.write(RichText.from_markup(f"[dim #6a7a99]session log: {self._log_path}[/dim #6a7a99]\n"))
-        self._boot_done = True
 
     def on_unmount(self) -> None:
         if not self._log_file.closed:
             self._log_file.close()
 
     def action_interrupt(self) -> None:
-        """Esc — cancel whatever the agent is currently awaiting via
-        run_interruptible() (a model call, a long shell command, ...)."""
         self._interrupt_event.set()
 
     async def run_interruptible(self, coro: Coroutine[Any, Any, T]) -> T:
         """Run `coro`; if the operator presses Esc before it finishes, cancel
-        it and raise Interrupted instead of returning a result."""
+        it and raise Interrupted."""
         self._interrupt_event.clear()
         task: asyncio.Task[T] = asyncio.ensure_future(coro)
         interrupt_wait = asyncio.ensure_future(self._interrupt_event.wait())
         done, _pending = await asyncio.wait(
-            {task, interrupt_wait}, return_when=asyncio.FIRST_COMPLETED
-        )
+            {task, interrupt_wait}, return_when=asyncio.FIRST_COMPLETED)
         if task in done:
             interrupt_wait.cancel()
             return task.result()
@@ -363,9 +150,6 @@ class SikunApp(App):
     def _status_text(self) -> str:
         elapsed = int(time.monotonic() - self._start_time)
         mm, ss = divmod(elapsed, 60)
-        mode = self.session_state.get("mode", "security")
-        model = self.board.get("model") or "-"
-        cost = self.board.get("cost", 0.0)
         sep = "[#2b3a5a]│[/#2b3a5a]"
         if self._activity:
             spin = self._SPINNER[self._frame % len(self._SPINNER)]
@@ -375,17 +159,12 @@ class SikunApp(App):
             lead = "[#39ff14]◉[/#39ff14]" if self._blink else "[#124a12]◉[/#124a12]"
             tail = ""
         return (
-            f"{lead} [bold #00f0ff]SIKUN//CSEC[/bold #00f0ff] {sep} "
+            f"{lead} [bold #00f0ff]SikunCybersecurity[/bold #00f0ff] {sep} "
             f"[dim #6a7a99]tgt[/dim #6a7a99] [#ff3bd6]{self.target}[/#ff3bd6] {sep} "
-            f"[dim #6a7a99]mode[/dim #6a7a99] [#b26bff]{mode}[/#b26bff] {sep} "
-            f"[dim #6a7a99]model[/dim #6a7a99] [#c7f5ff]{model}[/#c7f5ff] {sep} "
-            f"[#39ff14]${cost:.4f}[/#39ff14] {sep} [#00f0ff]{mm:02d}:{ss:02d}[/#00f0ff]{tail}"
+            f"[#00f0ff]{mm:02d}:{ss:02d}[/#00f0ff]{tail}"
         )
 
     def _tick(self) -> None:
-        """Fast animation tick. While the agent is working, repaint every frame
-        so the spinner spins; at idle, only repaint when the shown second flips
-        (keeps idle repaints ~1/s, which a CJK IME composition tolerates)."""
         self._frame += 1
         sec = int(time.monotonic() - self._start_time)
         if self._activity or sec != self._last_sec:
@@ -400,8 +179,6 @@ class SikunApp(App):
             pass
 
     def set_activity(self, label: str) -> None:
-        """Called by the agent loop to show a live spinner + label in the status
-        bar while a model call or tool is running."""
         self._activity = label
         self._refresh_status()
 
@@ -409,128 +186,19 @@ class SikunApp(App):
         self._activity = ""
         self._refresh_status()
 
-    def update_board(self, **kwargs: Any) -> None:
-        """Called by the agent backends (same asyncio loop) to push structured
-        state — model, cumulative cost, discovered ports — into the sidebar.
-        Findings/phase are derived separately in post_event."""
-        ports = kwargs.pop("ports", None)
-        if ports:
-            self._merge_ports(ports)
-        turn_cost = kwargs.pop("turn_cost", None)
-        if turn_cost is not None:
-            hist = self.board["cost_history"]
-            hist.append(float(turn_cost))
-            del hist[:-40]  # keep the last 40 for the sparkline
-        self.board.update(kwargs)
-        self._refresh_sidebar()
-
-    def _merge_ports(self, ports: list[dict]) -> None:
-        seen = {(p.get("host") or self.target, p.get("port"), p.get("protocol")): p for p in self.board["ports"]}
-        for p in ports:
-            key = (p.get("host") or self.target, p.get("port"), p.get("protocol"))
-            if key not in seen:
-                seen[key] = dict(p)
-                self.board["ports"].append(seen[key])
-            else:
-                seen[key].update({k: v for k, v in p.items() if v not in (None, "", "unknown")})
-
-    _SPARK = "▁▂▃▄▅▆▇█"
-
-    @staticmethod
-    def _clip(s: str, n: int) -> str:
-        s = (s or "").replace("\n", " ")
-        return s if len(s) <= n else "…" + s[-(n - 1):]
-
-    def _sparkline(self, vals: list, width: int = 28) -> str:
-        vals = vals[-width:]
-        if not vals:
-            return "[dim #6a7a99]—[/dim #6a7a99]"
-        lo, hi = min(vals), max(vals)
-        spark = "".join(
-            self._SPARK[0] if hi <= lo else self._SPARK[int((v - lo) / (hi - lo) * (len(self._SPARK) - 1))]
-            for v in vals
-        )
-        return f"[#b26bff]{spark}[/#b26bff]"
-
-    def _board_renderable(self) -> RichText:
-        b = self.board
-        rule = "[#1a2a44]" + "─" * 30 + "[/#1a2a44]"
-        L: list[str] = ["[bold #ff2bd6]▓ SITREP[/bold #ff2bd6]", rule]
-
-        # SESSION
-        L.append("[dim #6a7a99]phase[/dim #6a7a99] [#b26bff]" + str(b.get("phase", "-")) + "[/#b26bff]"
-                 + f"   [dim #6a7a99]turns[/dim #6a7a99] [#c7f5ff]{b.get('turns', 0)}[/#c7f5ff]"
-                 + f"  [dim #6a7a99]tools[/dim #6a7a99] [#c7f5ff]{b.get('tools', 0)}[/#c7f5ff]")
-        L.append("")
-
-        # SHELL
-        L.append("[bold #00f0ff]▸ SHELL[/bold #00f0ff]")
-        L.append(f" [dim #6a7a99]cwd[/dim #6a7a99] [#7fe0a0]{self._clip(b.get('cwd', '') or '~', 26)}[/#7fe0a0]")
-        last = b.get("last_cmd", "")
-        L.append(f" [#39ff14]$[/#39ff14] [#c7f5ff]{self._clip(last, 26) if last else '[dim #6a7a99](idle)[/dim #6a7a99]'}[/#c7f5ff]")
-        L.append("")
-
-        # COST + sparkline
-        L.append(f"[bold #ffb000]◆ COST[/bold #ffb000] [#39ff14]${b.get('cost', 0.0):.4f}[/#39ff14]")
-        L.append(" " + self._sparkline(b.get("cost_history", [])))
-        L.append("")
-
-        # PORTS
-        ports = b.get("ports", [])
-        L.append(f"[bold #00f0ff]▸ PORTS[/bold #00f0ff] [dim #6a7a99]({len(ports)})[/dim #6a7a99]")
-        if ports:
-            for p in ports[:6]:
-                L.append(f" [#39ff14]{p.get('port')}/{p.get('protocol', '')}[/#39ff14] [#c7f5ff]{p.get('service', '?')}[/#c7f5ff]")
-            if len(ports) > 6:
-                L.append(f" [dim #6a7a99]...(+{len(ports) - 6})[/dim #6a7a99]")
-        else:
-            L.append(" [dim #6a7a99](none)[/dim #6a7a99]")
-        L.append("")
-
-        # FINDINGS
-        findings = b.get("findings", {})
-        total_f = sum(findings.values())
-        L.append(f"[bold #ff3bd6]✖ FINDINGS[/bold #ff3bd6] [dim #6a7a99]({total_f})[/dim #6a7a99]")
-        if total_f:
-            for sev in _BOARD_SEV_ORDER:
-                n = findings.get(sev, 0)
-                if n:
-                    L.append(f" [{_BOARD_SEV_COLOR[sev]}]{sev}[/{_BOARD_SEV_COLOR[sev]}] {n}")
-        else:
-            L.append(" [dim #6a7a99](none yet)[/dim #6a7a99]")
-        return RichText.from_markup("\n".join(L))
-
-    def _refresh_sidebar(self) -> None:
-        try:
-            sidebar = self.query_one("#sidebar", Static)
-        except Exception:
-            return
-        sidebar.update(self._board_renderable())
-
     async def _drain_events(self) -> None:
         transcript = self.query_one("#transcript", RichLog)
         while True:
             event = await self.events.get()
-            # dim timestamp gutter on every line -> operator-log feel
             ts = datetime.datetime.now().strftime("%H:%M:%S")
             transcript.write(f"[#33425c]{ts}[/#33425c] {event.render()}")
 
     async def post_event(self, channel: str, text: str, severity: str | None = None) -> None:
-        """Call from the agent loop (same asyncio loop) to push a line into the
-        transcript, and mirror it (markup stripped) to the session log file on
-        disk — so cost/finding data survives even if the terminal scrollback
-        doesn't."""
+        """Push a line into the transcript and mirror it (markup stripped) to
+        the session log file."""
         event = AgentEvent(channel=channel, text=text, severity=severity)  # type: ignore[arg-type]
         await self.events.put(event)
         self._write_log_line(event)
-
-        # Derive board state from the event stream: the current phase follows
-        # the latest non-system channel, and finding counts tick up per report.
-        if channel in ("recon", "exploit", "finding"):
-            self.board["phase"] = channel
-        if channel == "finding" and severity in self.board["findings"]:
-            self.board["findings"][severity] += 1
-        self._refresh_sidebar()
 
     def _write_log_line(self, event: AgentEvent) -> None:
         if self._log_file.closed:
@@ -556,91 +224,22 @@ class SikunApp(App):
         await self.user_input.put(text)
 
     async def _handle_command(self, raw: str) -> None:
-        """Slash commands mutate session_state directly and never reach the
-        model as a conversation turn — /mode, /effort etc. are harness-level
-        controls, not instructions to the agent."""
-        parts = raw.split(maxsplit=1)
-        if not parts:
-            return
-        cmd, arg = parts[0].lower(), (parts[1].strip() if len(parts) > 1 else "")
-
-        if cmd == "mode":
-            if arg not in ("security", "study", "general"):
-                await self.post_event(
-                    "system", "[bold red]使い方: /mode security|study|general[/bold red]"
-                )
-                return
-            self.session_state["mode"] = arg
-            await self.post_event(
-                "system", f"[bold green]モード切替: {arg}(次のターンから反映)[/bold green]"
-            )
-        elif cmd == "effort":
-            if not arg:
-                await self.post_event("system", "[bold red]使い方: /effort low|medium|high|xhigh|max[/bold red]")
-                return
-            self.session_state["effort"] = arg
+        cmd = raw.split(maxsplit=1)[0].lower() if raw else ""
+        if cmd in ("quit", "exit", "q"):
+            self.exit()
+        elif cmd == "clear":
+            self.query_one("#transcript", RichLog).clear()
+        elif cmd == "help":
             await self.post_event(
                 "system",
-                f"[bold green]effort設定: {arg}(次のターンから反映。Geminiバックエンドでは"
-                "現状効果なし)[/bold green]",
-            )
-        elif cmd == "plan":
-            self.session_state["force_plan"] = "1"
-            await self.post_event("system", "[bold green]次のタスクは計画提示を強制します[/bold green]")
-        elif cmd == "model":
-            if arg not in ("lite", "full"):
-                await self.post_event("system", "[bold red]使い方: /model lite|full[/bold red]")
-                return
-            self.session_state["model"] = arg
-            note = "簡単な作業向けの軽量モデル" if arg == "lite" else "通常モデル"
-            await self.post_event(
-                "system", f"[bold green]モデル切替: {arg}({note}、次のターンから反映)[/bold green]"
-            )
+                "[dim]コマンド: /clear(画面消去) /quit(終了)。Esc=中断、Ctrl+C=終了。"
+                "それ以外の入力はそのまま指示になります。[/dim]")
         else:
-            await self.post_event("system", f"[bold red]不明なコマンド: /{cmd}[/bold red]")
+            await self.post_event("system", f"[dim]不明なコマンド: /{cmd}(/help)[/dim]")
 
     async def wait_for_instruction(self) -> str:
         """Block until the operator types something into the bottom input box."""
         return await self.user_input.get()
-
-    async def wait_for_choice(self, options: list[tuple[str, str]]) -> str:
-        """Show `options` (label, value) as a row of buttons instead of making
-        the operator type free text — used for plan approval / cost-cap
-        confirmation, where the answer is always one of a small fixed set.
-        The first option is focused by default so Enter picks it immediately.
-        Returns the `value` of whichever button was clicked or Enter'd."""
-        bar = self.query_one("#choice-bar", Horizontal)
-        await bar.remove_children()
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[str] = loop.create_future()
-        self._choice_future = future
-        buttons = []
-        for i, (label, value) in enumerate(options):
-            if i == 0:
-                variant = "success"
-            elif value in ("reject", "stop"):
-                variant = "error"
-            else:
-                variant = "default"
-            btn = Button(label, id=f"choice-{i}", variant=variant)
-            btn.choice_value = value  # type: ignore[attr-defined]
-            buttons.append(btn)
-        await bar.mount_all(buttons)
-        bar.display = True
-        buttons[0].focus()
-        try:
-            return await future
-        finally:
-            bar.display = False
-            self.query_one("#cmdline", Input).focus()
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        future = self._choice_future
-        if future is None or future.done():
-            return
-        value = getattr(event.button, "choice_value", None)
-        if value is not None:
-            future.set_result(value)
 
 
 async def _demo_agent(app: SikunApp) -> None:
@@ -648,22 +247,8 @@ async def _demo_agent(app: SikunApp) -> None:
     await asyncio.sleep(0.5)
     await app.post_event("recon", "nmap 実行中...")
     await asyncio.sleep(0.5)
-    await app.post_event("recon", "[+] port 22 open (ssh)")
     await app.post_event("recon", "[+] port 80 open (Apache 2.4.41)")
-    await asyncio.sleep(0.5)
-    await app.post_event("exploit", "/login に対して SQLi を試行中...")
-    await asyncio.sleep(0.8)
-    await app.post_event("exploit", "[+] SQLi confirmed — 認証バイパス成功")
-    await app.post_event(
-        "finding",
-        "Apache mod_xxx 既知の脆弱性 (CVE-2023-xxxx)",
-        severity="critical",
-    )
-    await app.post_event(
-        "finding",
-        "/login の SQLi — 認証バイパス可能",
-        severity="high",
-    )
+    await app.post_event("finding", "/login の SQLi — 認証バイパス可能", severity="high")
 
 
 def run_demo() -> None:

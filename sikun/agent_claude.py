@@ -1,6 +1,6 @@
 """Claude Agent SDK worker — the real engine behind an orchestrator category.
 
-This is the ``agent_gemini.py`` replacement for one worker: it drives the
+This worker drives the
 Claude Agent SDK (``claude_agent_sdk``) instead of hand-rolling the tool loop.
 The SDK supplies the agent loop, context management, built-in tools, MCP, and
 the permission gate; this module only wires SCS's existing pieces into it:

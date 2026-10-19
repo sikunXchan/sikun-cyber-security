@@ -23,7 +23,7 @@ from claude_agent_sdk import SdkMcpTool, tool
 
 from sikun.tools import run_dir_enum, run_http_probe, run_nmap_scan
 
-# JSON-Schema inputs, matching the Gemini FunctionDeclarations in agent_gemini.
+# JSON-Schema inputs for the three core recon tools (re-exposed to the Claude engine).
 _NMAP_SCHEMA = {
     "type": "object",
     "properties": {
