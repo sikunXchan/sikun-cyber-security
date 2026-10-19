@@ -72,7 +72,8 @@ def scoreboard(before: dict[str, dict], after: dict[str, dict]) -> dict:
 
 
 async def run_engine(url: str, model: str, scope: list[str],
-                     instruction: str, max_turns: int, budget_usd: float) -> dict:
+                     instruction: str, max_turns: int, budget_usd: float,
+                     effort: str = "high") -> dict:
     host = urlparse(url).hostname or "localhost"
     guard = new_guard(scope, _AUDIT, host)
     router = build_category_router(
@@ -80,10 +81,11 @@ async def run_engine(url: str, model: str, scope: list[str],
                      "認可範囲内で challenge を solved にすることを目指す。",
         guard=guard, model=model, plugins=[], target=host,
         ssh_host=None, workdir=Path.cwd())
-    # Apply per-worker budget/turn caps from the CLI.
+    # Apply per-worker budget/turn/effort caps from the CLI.
     for w in router.values():
         w.max_turns = max_turns
         w.max_budget_usd = budget_usd
+        w.effort = effort
 
     tasks = decompose(instruction, scope=scope, target=host, categories=list(router))
     print(f"[plan] {len(tasks)} tasks: " + ", ".join(f"{t.id}" for t in tasks))
@@ -103,6 +105,7 @@ def main() -> int:
     ap.add_argument("--instruction", default=None)
     ap.add_argument("--max-turns", type=int, default=40)
     ap.add_argument("--budget-usd", type=float, default=5.0)
+    ap.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
     ap.add_argument("--score-only", action="store_true",
                     help="エージェントを走らせず、現在のスコアボードだけ表示")
     args = ap.parse_args()
@@ -123,7 +126,7 @@ def main() -> int:
 
     if not args.score_only:
         asyncio.run(run_engine(args.url, args.model, scope, instruction,
-                               args.max_turns, args.budget_usd))
+                               args.max_turns, args.budget_usd, args.effort))
 
     after = fetch_challenges(args.url)
     board = scoreboard(before, after)

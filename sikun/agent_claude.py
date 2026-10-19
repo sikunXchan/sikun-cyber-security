@@ -139,6 +139,7 @@ def build_agent_options(
     workdir: Path | None = None,
     sandbox: Any = None,
     resume: str | None = None,
+    effort: str = "high",
     core_tools: list[SdkMcpTool] | None = None,
     core_scope: dict[str, Callable[[dict[str, Any]], list[str]]] | None = None,
 ) -> ClaudeAgentOptions:
@@ -190,6 +191,7 @@ def build_agent_options(
         mcp_servers=mcp_servers,
         can_use_tool=make_scope_permission(guard, extra_declared=extra_declared),
         model=model,
+        effort=effort,
         max_turns=max_turns,
         max_budget_usd=max_budget_usd,
         cwd=str(workdir) if workdir else None,
@@ -220,12 +222,23 @@ class ClaudeWorker:
     max_turns: int = 24
     max_budget_usd: float | None = 2.0
     sandbox: Any = None            # pass a SandboxSettings to restrict network/fs
+    effort: str = "high"           # low|medium|high|xhigh|max — agentic tasks like high+
     enable_core_tools: bool = True  # expose nmap_scan/http_probe/dir_enum as MCP tools
+    enable_browser: bool = True     # expose browser_fetch (headless Chromium) for DOM/JS targets
 
     def _ctx_factory(self) -> Callable[[], PluginContext]:
         return make_ctx_factory(self.target, self.ssh_host, self.workdir)
 
     def _build_options(self) -> ClaudeAgentOptions:
+        core: list[SdkMcpTool] = []
+        cscope: dict[str, Callable[[dict[str, Any]], list[str]]] = {}
+        if self.enable_core_tools:
+            core += build_core_tools(self.ssh_host)
+            cscope.update(CORE_SCOPE)
+        if self.enable_browser:
+            from sikun.claude_browser_tool import BROWSER_SCOPE, browser_tools
+            core += browser_tools()
+            cscope.update(BROWSER_SCOPE)
         return build_agent_options(
             system_prompt=f"{self.persona}\n\n{_RESULT_INSTRUCTION}",
             guard=self.guard,
@@ -233,12 +246,13 @@ class ClaudeWorker:
             plugins=self.plugins,
             ctx_factory=self._ctx_factory(),
             model=self.model,
+            effort=self.effort,
             max_turns=self.max_turns,
             max_budget_usd=self.max_budget_usd,
             workdir=self.workdir,
             sandbox=self.sandbox,
-            core_tools=build_core_tools(self.ssh_host) if self.enable_core_tools else None,
-            core_scope=CORE_SCOPE if self.enable_core_tools else None,
+            core_tools=core or None,
+            core_scope=cscope or None,
         )
 
     async def run(self, task: SubTask, upstream: dict[str, WorkerResult]) -> WorkerResult:

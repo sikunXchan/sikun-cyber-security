@@ -177,8 +177,10 @@ scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
 - `sikun/agent_gemini.py` — Gemini エンジン(Gemini tool-use ループ・永続シェル・thinking配分・構造化ツール・永続メモリ・行き詰まり検知による戦略の自己修正・結論前の攻撃面の網羅チェック)
 - `sikun/engine_claude.py` — Claude エンジン(Claude Agent SDK。TUIから `--engine claude` で選択。指示を分解してオーケストレータで実行)
 - `sikun/orchestrator.py` — オーケストレータ=ワーカー中核(DAG分解・層ごと並列・結果統合)
-- `sikun/agent_claude.py` — Claude ワーカー + オプション構築(プラグイン/コアツールのMCP化・scope permission)
-- `sikun/decompose.py` — ユーザー指示 → SubTask の DAG への分解
+- `sikun/agent_claude.py` — Claude ワーカー + オプション構築(プラグイン/コアツールのMCP化・scope permission・effort)
+- `sikun/claude_core_tools.py` — nmap_scan / http_probe / dir_enum を Claude の MCP ツール化
+- `sikun/claude_browser_tool.py` — browser_fetch(headless Chromium、DOM/JS依存のWeb課題向け・任意依存 playwright)
+- `sikun/decompose.py` — ユーザー指示 → SubTask の DAG への分解(単一カテゴリは分割しない保守的分解)
 - `sikun/prompts.py` — システムプロンプト・テンプレート(security / general モード)
 - `sikun/tools.py` — 永続シェル + 構造化ツール実装(nmap_scan / http_probe / dir_enum)
 - `sikun/plugins.py` — **プラグイン基盤**(自作ツールの自動読み込み)

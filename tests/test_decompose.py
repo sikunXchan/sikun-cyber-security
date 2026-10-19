@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from claude_agent_sdk import ToolPermissionContext
 
 from sikun.agent_claude import build_agent_options, make_ctx_factory
+from sikun.claude_browser_tool import BROWSER_SCOPE, browser_tools
 from sikun.claude_core_tools import CORE_SCOPE, core_tools
 from sikun.decompose import decompose, detect_categories
 from sikun.orchestrator import build_layers
@@ -65,6 +66,35 @@ def test_decompose_respects_allowed_categories():
     # crypto detected but not allowed → only recon remains
     tasks = decompose("RSA暗号を解析", scope=[], target="t", categories=["recon", "web"])
     assert [t.id for t in tasks] == ["recon-1"]
+
+
+def test_decompose_conservative_single_category_no_split():
+    # pure-web (Juice-Shop-like) instruction → one web worker owns recon+exploit
+    tasks = decompose("管理画面のSQLiとXSSを調べて solved にする", scope=["localhost"])
+    assert [t.id for t in tasks] == ["web-1"]
+    assert tasks[0].depends_on == [] and "nmap_scan" in tasks[0].tools
+
+
+def test_decompose_conservative_off_splits_single_category():
+    tasks = decompose("管理画面のSQLiを調べる", scope=["localhost"], conservative=False)
+    ids = {t.id for t in tasks}
+    assert ids == {"recon-1", "web-1"}
+
+
+def test_browser_tool_name_and_scope():
+    tools = browser_tools()
+    assert [t.name for t in tools] == ["browser_fetch"]
+    assert BROWSER_SCOPE["browser_fetch"]({"url": "http://localhost:3000/#/x"}) == ["http://localhost:3000/#/x"]
+    assert BROWSER_SCOPE["browser_fetch"]({}) == []
+
+
+def test_build_agent_options_sets_effort():
+    with tempfile.TemporaryDirectory() as d:
+        guard = new_guard(["localhost"], Path(d) / "a.log", "localhost")
+        opts = build_agent_options(
+            system_prompt="p", guard=guard, allowed_tools=[], plugins=[],
+            ctx_factory=make_ctx_factory("localhost", None, Path(d)), effort="xhigh")
+    assert opts.effort == "xhigh"
 
 
 # ── core tools + scope enforcement ─────────────────────────────────────────
