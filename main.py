@@ -11,7 +11,6 @@ import sys
 
 from dotenv import load_dotenv
 
-from sikun.agent_gemini import run_agent
 from sikun.banner import print_banner
 from sikun.profile import load_profile
 from sikun.scaffold import init_agent
@@ -73,6 +72,12 @@ def main() -> None:
     )
     parser.add_argument("--task", dest="initial_instruction", help="初期指示文を直接指定(省略時は対話プロンプト)")
     parser.add_argument(
+        "--engine",
+        choices=["gemini", "claude"],
+        default=os.environ.get("SIKUN_ENGINE", "gemini"),
+        help="推論バックエンド。gemini(既定)= Gemini API、claude = Claude Agent SDK(ANTHROPIC_API_KEY が必要)。TUIは同じ",
+    )
+    parser.add_argument(
         "--study",
         action="store_true",
         help="学習・解析モードで起動(攻撃せず、CVE/手法の学習や成果物の防御的解析に使う)。対象ホスト不要",
@@ -130,6 +135,13 @@ def main() -> None:
             if not target:
                 print("対象が指定されていません。終了します。")
                 sys.exit(1)
+
+    # Pick the inference backend. Deferred import so only the selected engine's
+    # dependencies load (google-genai for gemini, claude_agent_sdk for claude).
+    if args.engine == "claude":
+        from sikun.engine_claude import run_agent
+    else:
+        from sikun.agent_gemini import run_agent
 
     app = SikunApp(
         target=target,

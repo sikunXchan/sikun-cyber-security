@@ -104,6 +104,76 @@ def _extract_result(text: str, category: str) -> WorkerResult:
                         findings=[{"type": "note", "detail": text[:2000]}], raw=text)
 
 
+def make_ctx_factory(target: str, ssh_host: str | None, workdir: Path) -> Callable[[], PluginContext]:
+    """Build a PluginContext factory whose shell runs commands locally or over
+    SSH against the authorized target — the same wiring the Gemini engine's
+    PersistentShell provides, in minimal form (no cd/env persistence across
+    calls; reuse sikun.tools.PersistentShell when that is needed)."""
+    import asyncio
+
+    async def run_shell(command: str) -> str:
+        argv = ["ssh", ssh_host, command] if ssh_host else ["bash", "-lc", command]
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            cwd=str(workdir))
+        out, _ = await proc.communicate()
+        return out.decode("utf-8", "replace")
+
+    def make() -> PluginContext:
+        return PluginContext(target=target, ssh_host=ssh_host, workdir=workdir, run=run_shell)
+
+    return make
+
+
+def build_agent_options(
+    *,
+    system_prompt: str,
+    guard: ScopeGuard,
+    allowed_tools: list[str],
+    plugins: list[ToolPlugin],
+    ctx_factory: Callable[[], PluginContext],
+    model: str = "claude-opus-5-5",
+    max_turns: int = 24,
+    max_budget_usd: float | None = 2.0,
+    workdir: Path | None = None,
+    sandbox: Any = None,
+    resume: str | None = None,
+) -> ClaudeAgentOptions:
+    """Assemble ClaudeAgentOptions from SCS pieces: a persona/mode system
+    prompt, the built-in allowed tools, SCS plugins exposed as in-process MCP
+    tools, and the scope-enforcing permission gate. Shared by the per-category
+    ``ClaudeWorker`` and the TUI engine (``sikun.engine_claude``) so the wiring
+    lives in exactly one place."""
+    sdk_tools = [plugin_to_sdk_tool(p, ctx_factory) for p in plugins]
+    mcp_servers: dict[str, Any] = {}
+    allowed = list(allowed_tools)
+    if sdk_tools:
+        mcp_servers["scs"] = create_sdk_mcp_server("scs", tools=sdk_tools)
+        # SDK MCP tool call names are namespaced "mcp__<server>__<tool>".
+        allowed += [f"mcp__scs__{p.name}" for p in plugins]
+
+    # Plugins that declare scope_targets get reliable (hard-block) enforcement.
+    plugin_scope = {p.name: p.scope_targets for p in plugins if p.scope_targets}
+
+    def extra_declared(tool_name: str, tool_input: dict[str, Any]) -> list[str] | None:
+        base = tool_name.split("__")[-1]  # strip mcp__scs__ prefix
+        fn = plugin_scope.get(base)
+        return fn(tool_input) if fn else None
+
+    return ClaudeAgentOptions(
+        system_prompt=system_prompt,
+        allowed_tools=allowed,
+        mcp_servers=mcp_servers,
+        can_use_tool=make_scope_permission(guard, extra_declared=extra_declared),
+        model=model,
+        max_turns=max_turns,
+        max_budget_usd=max_budget_usd,
+        cwd=str(workdir) if workdir else None,
+        resume=resume,
+        sandbox=sandbox,
+    )
+
+
 @dataclass
 class ClaudeWorker:
     """A category worker backed by the Claude Agent SDK.
@@ -128,51 +198,19 @@ class ClaudeWorker:
     sandbox: Any = None            # pass a SandboxSettings to restrict network/fs
 
     def _ctx_factory(self) -> Callable[[], PluginContext]:
-        async def run_shell(command: str) -> str:
-            # Local-or-SSH shell for plugins, mirroring the Gemini engine's
-            # PersistentShell wiring. Kept minimal here; real deployments
-            # should reuse sikun.tools.PersistentShell for cd/env persistence.
-            import asyncio
-            argv = (["ssh", self.ssh_host, command] if self.ssh_host
-                    else ["bash", "-lc", command])
-            proc = await asyncio.create_subprocess_exec(
-                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                cwd=str(self.workdir))
-            out, _ = await proc.communicate()
-            return out.decode("utf-8", "replace")
-
-        def make() -> PluginContext:
-            return PluginContext(target=self.target, ssh_host=self.ssh_host,
-                                 workdir=self.workdir, run=run_shell)
-        return make
+        return make_ctx_factory(self.target, self.ssh_host, self.workdir)
 
     def _build_options(self) -> ClaudeAgentOptions:
-        ctx_factory = self._ctx_factory()
-        sdk_tools = [plugin_to_sdk_tool(p, ctx_factory) for p in self.plugins]
-        mcp_servers: dict[str, Any] = {}
-        allowed = list(self.allowed_tools)
-        if sdk_tools:
-            mcp_servers["scs"] = create_sdk_mcp_server("scs", tools=sdk_tools)
-            # SDK MCP tool call names are namespaced "mcp__<server>__<tool>".
-            allowed += [f"mcp__scs__{p.name}" for p in self.plugins]
-
-        # Plugins that declare scope_targets get reliable enforcement.
-        plugin_scope = {p.name: p.scope_targets for p in self.plugins if p.scope_targets}
-
-        def extra_declared(tool_name: str, tool_input: dict[str, Any]) -> list[str] | None:
-            base = tool_name.split("__")[-1]  # strip mcp__scs__ prefix
-            fn = plugin_scope.get(base)
-            return fn(tool_input) if fn else None
-
-        return ClaudeAgentOptions(
+        return build_agent_options(
             system_prompt=f"{self.persona}\n\n{_RESULT_INSTRUCTION}",
-            allowed_tools=allowed,
-            mcp_servers=mcp_servers,
-            can_use_tool=make_scope_permission(self.guard, extra_declared=extra_declared),
+            guard=self.guard,
+            allowed_tools=self.allowed_tools,
+            plugins=self.plugins,
+            ctx_factory=self._ctx_factory(),
             model=self.model,
             max_turns=self.max_turns,
             max_budget_usd=self.max_budget_usd,
-            cwd=str(self.workdir),
+            workdir=self.workdir,
             sandbox=self.sandbox,
         )
 
