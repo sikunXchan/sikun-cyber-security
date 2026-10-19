@@ -40,10 +40,12 @@ from claude_agent_sdk import (
     query,
 )
 
-from sikun.agent_claude import build_agent_options, make_ctx_factory
+from sikun.agent_claude import ClaudeWorker, build_agent_options, make_ctx_factory
+from sikun.decompose import WORKER_CATEGORIES, decompose
 from sikun.events import render_tool_call, render_tool_result
+from sikun.orchestrator import orchestrate, synthesize
 from sikun.permission import new_guard
-from sikun.plugins import load_plugins
+from sikun.plugins import ToolPlugin, load_plugins
 from sikun.profile import Profile
 from sikun.prompts import (
     GENERAL_SYSTEM_PROMPT_TEMPLATE,
@@ -54,6 +56,43 @@ from sikun.tools import preview_for_ui
 from sikun.tui import LOG_DIR
 
 DEFAULT_MODEL = "claude-opus-5-5"
+
+# Role line appended to the profile persona for each category worker, so a
+# child stays focused on its slice of the DAG.
+CATEGORY_ROLES: dict[str, str] = {
+    "recon": "ネットワーク偵察担当。nmap_scan / http_probe で開放ポート・サービス・Web入口を特定し、根拠付きで報告する。攻撃はしない。",
+    "web": "Web脆弱性調査担当。http_probe / dir_enum と Bash で管理画面・API・認証周りを認可範囲内で調べる。",
+    "crypto": "暗号解析担当。鍵・証明書・暗号設定の弱点を調べる。",
+    "reversing": "リバースエンジニアリング担当。バイナリ/ファームウェアを静的解析する。",
+    "forensics": "フォレンジック担当。ログ・パケット・ダンプ・成果物を解析する。",
+    "pwn": "バイナリエクスプロイト観点の担当。メモリ破壊・権限昇格の観点で認可範囲内に調べる。",
+    "mobile": "モバイルアプリ解析担当。APK/アプリの静的解析を行う。",
+    "misc": "汎用担当。他カテゴリに属さない課題を扱う。",
+}
+
+
+def _build_router(
+    base_persona: str,
+    guard,
+    model: str,
+    plugins: list[ToolPlugin],
+    target: str,
+    ssh_host: str | None,
+    workdir: Path,
+) -> dict[str, ClaudeWorker]:
+    """One ClaudeWorker per category, sharing scope/plugins/core tools. Each
+    gets the profile persona plus its category role line."""
+    router: dict[str, ClaudeWorker] = {}
+    for cat in WORKER_CATEGORIES:
+        persona = base_persona.strip()
+        role = CATEGORY_ROLES.get(cat, "")
+        persona = f"{persona}\n\n# 役割\n{role}" if persona else role
+        router[cat] = ClaudeWorker(
+            category=cat, persona=persona, guard=guard, model=model,
+            allowed_tools=["Bash"], plugins=plugins, target=target,
+            ssh_host=ssh_host, workdir=workdir,
+        )
+    return router
 
 
 def _build_system_prompt(target: str, mode: str, persona: str) -> str:
@@ -167,6 +206,8 @@ async def run_agent(
     model = profile.model or DEFAULT_MODEL
     persona = profile.persona
     ctx_factory = make_ctx_factory(target, ssh_host, workdir)
+    scope_list = list(profile.scope) or ([target] if target else [])
+    router = _build_router(persona, guard, model, plugins, target, ssh_host, workdir)
     await app.post_event(
         "system",
         f"[dim]Claude エンジン起動(model={model}, target={target}, ssh={ssh_host or 'ローカル'})[/dim]")
@@ -182,22 +223,59 @@ async def run_agent(
         first = False
 
         mode = app.session_state.get("mode", "security")
-        options = build_agent_options(
-            system_prompt=_build_system_prompt(target, mode, persona),
-            guard=guard,
-            allowed_tools=["Bash"],          # built-in; plugins add MCP tools
-            plugins=plugins,
-            ctx_factory=ctx_factory,
-            model=model,
-            workdir=workdir,
-            resume=session_id,               # continue the conversation after turn 1
-        )
-
         try:
-            new_sid = await app.run_interruptible(_consume_turn(app, instruction, options))
-            if new_sid:
-                session_id = new_sid
+            if mode == "security":
+                # Multi-agent: decompose → orchestrate category workers.
+                await app.run_interruptible(
+                    _run_orchestrated(app, instruction, router, scope_list, target))
+            else:
+                # study / general: a single direct agent (no decomposition).
+                options = build_agent_options(
+                    system_prompt=_build_system_prompt(target, mode, persona),
+                    guard=guard, allowed_tools=["Bash"], plugins=plugins,
+                    ctx_factory=ctx_factory, model=model, workdir=workdir,
+                    resume=session_id,
+                )
+                new_sid = await app.run_interruptible(_consume_turn(app, instruction, options))
+                if new_sid:
+                    session_id = new_sid
         except asyncio.CancelledError:
             await app.post_event("system", "[bold yellow]⏹ 中断しました(Esc)[/bold yellow]")
         except Exception as exc:  # noqa: BLE001 — surface any SDK/API error in the TUI
             await app.post_event("system", f"[bold red]APIエラー: {exc}[/bold red]")
+
+
+async def _run_orchestrated(app, instruction, router, scope_list, target) -> None:
+    """Security-mode turn: decompose the instruction into a DAG, run the
+    category workers layer by layer, and post the merged report to the TUI."""
+    tasks = decompose(instruction, scope=scope_list, target=target,
+                      categories=list(router.keys()))
+    plan = " → ".join(
+        "[" + "+".join(t.id for t in layer) + "]"
+        for layer in _preview_layers(tasks))
+    await app.post_event("system", f"[dim]分解: {len(tasks)} タスク / 実行計画 {plan}[/dim]")
+
+    results = await orchestrate(tasks, router, on_event=app.post_event)
+    report = synthesize(results)
+
+    s = report["summary"]
+    await app.post_event(
+        "finding" if report["findings"] else "system",
+        f"統合: タスク{s['tasks']} / findings {s['findings']} / blocked {s['blocked']} / errors {s['errors']}")
+    for f in report["findings"]:
+        detail = f.get("detail", "")
+        await app.post_event("finding",
+                             f"[{f.get('source', '?')}/{f.get('category', '?')}] "
+                             f"{f.get('type', '?')}: {detail}")
+    for hint in report["next_hints"]:
+        await app.post_event("system", f"[dim]→ {hint}[/dim]")
+
+
+def _preview_layers(tasks):
+    """Compute the layers for the plan preview; tolerate a bad DAG by showing
+    tasks flat rather than raising in the UI path."""
+    from sikun.orchestrator import build_layers
+    try:
+        return build_layers(tasks)
+    except ValueError:
+        return [tasks]

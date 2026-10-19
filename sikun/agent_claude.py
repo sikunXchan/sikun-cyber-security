@@ -46,6 +46,8 @@ from claude_agent_sdk import (
     tool,
 )
 
+from sikun.claude_core_tools import CORE_SCOPE
+from sikun.claude_core_tools import core_tools as build_core_tools
 from sikun.orchestrator import SubTask, Worker, WorkerResult
 from sikun.permission import make_scope_permission
 from sikun.plugins import PluginContext, ToolPlugin
@@ -138,26 +140,40 @@ def build_agent_options(
     workdir: Path | None = None,
     sandbox: Any = None,
     resume: str | None = None,
+    core_tools: list[SdkMcpTool] | None = None,
+    core_scope: dict[str, Callable[[dict[str, Any]], list[str]]] | None = None,
 ) -> ClaudeAgentOptions:
     """Assemble ClaudeAgentOptions from SCS pieces: a persona/mode system
-    prompt, the built-in allowed tools, SCS plugins exposed as in-process MCP
-    tools, and the scope-enforcing permission gate. Shared by the per-category
-    ``ClaudeWorker`` and the TUI engine (``sikun.engine_claude``) so the wiring
-    lives in exactly one place."""
+    prompt, the built-in allowed tools, SCS plugins and core recon tools
+    exposed as in-process MCP tools, and the scope-enforcing permission gate.
+    Shared by the per-category ``ClaudeWorker`` and the TUI engine
+    (``sikun.engine_claude``) so the wiring lives in exactly one place.
+
+    ``core_tools`` are SDK tools (from ``sikun.claude_core_tools``) and
+    ``core_scope`` maps each of their names to a reliable target extractor —
+    merged with plugins' ``scope_targets`` so the permission gate hard-blocks
+    out-of-scope calls for both."""
     sdk_tools = [plugin_to_sdk_tool(p, ctx_factory) for p in plugins]
+    # name -> reliable target extractor, for the permission gate.
+    scope_map: dict[str, Callable[[dict[str, Any]], list[str]]] = {
+        p.name: p.scope_targets for p in plugins if p.scope_targets}
+    tool_names = [p.name for p in plugins]
+    if core_tools:
+        sdk_tools += core_tools
+        tool_names += [t.name for t in core_tools]
+        if core_scope:
+            scope_map.update(core_scope)
+
     mcp_servers: dict[str, Any] = {}
     allowed = list(allowed_tools)
     if sdk_tools:
         mcp_servers["scs"] = create_sdk_mcp_server("scs", tools=sdk_tools)
         # SDK MCP tool call names are namespaced "mcp__<server>__<tool>".
-        allowed += [f"mcp__scs__{p.name}" for p in plugins]
-
-    # Plugins that declare scope_targets get reliable (hard-block) enforcement.
-    plugin_scope = {p.name: p.scope_targets for p in plugins if p.scope_targets}
+        allowed += [f"mcp__scs__{name}" for name in tool_names]
 
     def extra_declared(tool_name: str, tool_input: dict[str, Any]) -> list[str] | None:
         base = tool_name.split("__")[-1]  # strip mcp__scs__ prefix
-        fn = plugin_scope.get(base)
+        fn = scope_map.get(base)
         return fn(tool_input) if fn else None
 
     return ClaudeAgentOptions(
@@ -196,6 +212,7 @@ class ClaudeWorker:
     max_turns: int = 24
     max_budget_usd: float | None = 2.0
     sandbox: Any = None            # pass a SandboxSettings to restrict network/fs
+    enable_core_tools: bool = True  # expose nmap_scan/http_probe/dir_enum as MCP tools
 
     def _ctx_factory(self) -> Callable[[], PluginContext]:
         return make_ctx_factory(self.target, self.ssh_host, self.workdir)
@@ -212,6 +229,8 @@ class ClaudeWorker:
             max_budget_usd=self.max_budget_usd,
             workdir=self.workdir,
             sandbox=self.sandbox,
+            core_tools=build_core_tools(self.ssh_host) if self.enable_core_tools else None,
+            core_scope=CORE_SCOPE if self.enable_core_tools else None,
         )
 
     async def run(self, task: SubTask, upstream: dict[str, WorkerResult]) -> WorkerResult:

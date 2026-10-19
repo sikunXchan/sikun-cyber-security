@@ -39,27 +39,18 @@ python main.py --logs                          # 過去セッションのログ�
   (コード/設定/難読化スクリプト/ログ/依存)の防御的な静的解析。標的不要で**毎日開ける**常用モード
 - **`general`(汎用)** — セキュリティに限らない一般的な作業アシスタント
 
-## ネイティブデスクトップUI(`gui.py`)
+## 推論バックエンド(`--engine`)
 
-`main.py`(Textual製TUI)と同じエージェント・コア(`sikun/agent_gemini.py`)を、
-ダッシュボード風のネイティブウィンドウ(pywebview)で動かせる。
+TUI は同じまま、推論バックエンドを切り替えられる。
 
 ```bash
-pip install -r requirements.txt   # pywebview も含む
-python gui.py <対象ホスト>
-python gui.py --study             # 学習・解析モード
-python gui.py <対象ホスト> --profile web --ssh user@pi
+python main.py <対象ホスト> --engine gemini   # 既定: Gemini API
+python main.py <対象ホスト> --engine claude   # Claude Agent SDK(ANTHROPIC_API_KEY が必要)
 ```
 
-画面は3つ:
-
-- **Dashboard** — トランスクリプト(recon/exploit/finding/tool呼び出し)+ SITREP
-  サイドバー(コスト・ポート・findings)。TUIの `sikun/tui.py` と同じイベントストリームを表示する
-- **Reports** — `remediations/`(修復アドバイス)と `detections/`(Sigmaルール)を一覧・閲覧
-- **Settings** — `profiles/*.toml` をその場で編集・保存
-
-Linux では OS 側に WebView ランタイムが要る(例: `apt install python3-gi gir1.2-webkit2-4.1`)。
-macOS/Windows は標準の WebKit / WebView2 がそのまま使われる。
+`--engine claude` では、親エージェントが指示を分解(DAG)し、カテゴリ別の子ワーカーへ
+分配するオーケストレータ構成で動く(`sikun/orchestrator.py` / `sikun/engine_claude.py`)。
+scope 強制・監査ログは Gemini エンジンと同じ(`sikun/scope.py` → SDK の permission)。
 
 ## 自分専用エージェントの作り方
 
@@ -182,9 +173,12 @@ scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
 
 ## 構成
 
-- `main.py` — CLIエントリ(`--profile` / `--init` / `--ssh` / `--logs`)
-- `gui.py` — ネイティブデスクトップUIエントリ(pywebview、`sikun/webapp.py` を使う)
-- `sikun/agent_gemini.py` — エージェント・コア(Gemini tool-use ループ・永続シェル・thinking配分・構造化ツール・永続メモリ・行き詰まり検知による戦略の自己修正・結論前の攻撃面の網羅チェック)
+- `main.py` — CLIエントリ(`--profile` / `--init` / `--ssh` / `--logs` / `--engine`)
+- `sikun/agent_gemini.py` — Gemini エンジン(Gemini tool-use ループ・永続シェル・thinking配分・構造化ツール・永続メモリ・行き詰まり検知による戦略の自己修正・結論前の攻撃面の網羅チェック)
+- `sikun/engine_claude.py` — Claude エンジン(Claude Agent SDK。TUIから `--engine claude` で選択。指示を分解してオーケストレータで実行)
+- `sikun/orchestrator.py` — オーケストレータ=ワーカー中核(DAG分解・層ごと並列・結果統合)
+- `sikun/agent_claude.py` — Claude ワーカー + オプション構築(プラグイン/コアツールのMCP化・scope permission)
+- `sikun/decompose.py` — ユーザー指示 → SubTask の DAG への分解
 - `sikun/prompts.py` — システムプロンプト・テンプレート(security / general モード)
 - `sikun/tools.py` — 永続シェル + 構造化ツール実装(nmap_scan / http_probe / dir_enum)
 - `sikun/plugins.py` — **プラグイン基盤**(自作ツールの自動読み込み)
@@ -192,7 +186,6 @@ scope = ["10.20.3.0/24", "10.20.9.0/24"]   # 認可された網の和集合
 - `sikun/scaffold.py` — `--init` の雛形生成
 - `sikun/memory.py` — ターゲット別の永続メモリ(セッション間でポート/finding を継続)
 - `sikun/tui.py` — Textual製リッチUI(トランスクリプト + 戦況ボード)
-- `sikun/webapp.py` / `sikun/web/` — pywebview製ネイティブUI(`sikun/tui.py` と同じイベント/ボード・インターフェースを実装)
 - `profiles/` — エージェント・プロファイル(TOML)
 - `plugins/` — 自作ツール(プラグイン)
 
