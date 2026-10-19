@@ -31,3 +31,6 @@ sikun/web/assets/
 
 # Claude Code のローカル個人設定(共有しない)
 .claude/settings.local.json
+
+# orchestrator 実験の一時監査ログ
+experiments/*_audit.log
