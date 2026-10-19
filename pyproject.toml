@@ -1,0 +1,55 @@
+# Sikun Cyber Security (SCS) — プロジェクト定義。
+# Node.js の package.json に相当する「1ファイルに依存・コマンドを集約」したもの。
+# 依存は用途別に [project.optional-dependencies] で分けてある:
+#   pip install -e .            # コア(TUI + Gemini エンジン)
+#   pip install -e ".[claude]"  # + Claude Agent SDK エンジン
+#   pip install -e ".[browser]" # + headless ブラウザツール(playwright)
+#   pip install -e ".[all,dev]" # 全部 + テスト
+# 既存の requirements.txt / requirements-dev.txt も残してあり、そちらは
+# 「素の pip -r で入れたい人向けのコア一式」。pyproject がより新しい正(canonical)。
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sikun-cyber-security"
+version = "2.17.0"
+description = "認可された対象に対する攻撃的セキュリティ診断を自律的に行うAIエージェント(TUI + Gemini/Claude エンジン)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=0.60.0",
+    "rich>=13.7.0",
+    "Pillow>=10.0.0",
+    "python-dotenv>=1.0.0",
+    "numpy>=1.26.0",
+    "google-genai>=1.0.0",   # 既定(--engine gemini)エンジン
+]
+
+[project.optional-dependencies]
+# Claude Agent SDK エンジン(--engine claude)。APIキー or `claude` CLI ログインで動く。
+claude = ["claude-agent-sdk>=0.2.0"]
+# browser_fetch(DOM/JS依存のWeb課題向け)。別途 `playwright install chromium` が必要。
+browser = ["playwright>=1.40.0"]
+# Metasploit RPC 連携プラグイン(本体 metasploit-framework は別途OS側で導入)。
+msf = ["pymetasploit3>=1.0.0"]
+# ネイティブデスクトップUIは廃止済みのため extra なし。
+dev = ["pytest>=8.0.0"]
+all = [
+    "claude-agent-sdk>=0.2.0",
+    "playwright>=1.40.0",
+    "pymetasploit3>=1.0.0",
+]
+
+[project.scripts]
+# `sikun <対象> --engine claude` のように起動できる(main.py:main)。
+sikun = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["sikun*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

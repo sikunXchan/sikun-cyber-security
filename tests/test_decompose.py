@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from claude_agent_sdk import ToolPermissionContext
 
 from sikun.agent_claude import build_agent_options, make_ctx_factory
+from sikun.claude_browser_tool import BROWSER_SCOPE, browser_tools
 from sikun.claude_core_tools import CORE_SCOPE, core_tools
 from sikun.decompose import decompose, detect_categories
 from sikun.orchestrator import build_layers
@@ -67,6 +68,35 @@ def test_decompose_respects_allowed_categories():
     assert [t.id for t in tasks] == ["recon-1"]
 
 
+def test_decompose_conservative_single_category_no_split():
+    # pure-web (Juice-Shop-like) instruction → one web worker owns recon+exploit
+    tasks = decompose("管理画面のSQLiとXSSを調べて solved にする", scope=["localhost"])
+    assert [t.id for t in tasks] == ["web-1"]
+    assert tasks[0].depends_on == [] and "nmap_scan" in tasks[0].tools
+
+
+def test_decompose_conservative_off_splits_single_category():
+    tasks = decompose("管理画面のSQLiを調べる", scope=["localhost"], conservative=False)
+    ids = {t.id for t in tasks}
+    assert ids == {"recon-1", "web-1"}
+
+
+def test_browser_tool_name_and_scope():
+    tools = browser_tools()
+    assert [t.name for t in tools] == ["browser_fetch"]
+    assert BROWSER_SCOPE["browser_fetch"]({"url": "http://localhost:3000/#/x"}) == ["http://localhost:3000/#/x"]
+    assert BROWSER_SCOPE["browser_fetch"]({}) == []
+
+
+def test_build_agent_options_sets_effort():
+    with tempfile.TemporaryDirectory() as d:
+        guard = new_guard(["localhost"], Path(d) / "a.log", "localhost")
+        opts = build_agent_options(
+            system_prompt="p", guard=guard, allowed_tools=[], plugins=[],
+            ctx_factory=make_ctx_factory("localhost", None, Path(d)), effort="xhigh")
+    assert opts.effort == "xhigh"
+
+
 # ── core tools + scope enforcement ─────────────────────────────────────────
 
 def test_core_tools_names():
@@ -80,16 +110,20 @@ def test_core_scope_extraction():
     assert CORE_SCOPE["nmap_scan"]({}) == []
 
 
-def test_build_agent_options_registers_core_tool_names():
+def test_scope_gated_tools_are_not_in_allowed_tools():
+    # Regression guard: a tool listed in allowed_tools is auto-approved and
+    # SHADOWS can_use_tool (the SDK skips the scope gate for it). So the MCP
+    # core tools must NOT be in allowed_tools — otherwise scope isn't enforced.
     with tempfile.TemporaryDirectory() as d:
         guard = new_guard(["10.13.37.0/24"], Path(d) / "a.log", "10.13.37.10")
         opts = build_agent_options(
-            system_prompt="p", guard=guard, allowed_tools=["Bash"], plugins=[],
+            system_prompt="p", guard=guard, allowed_tools=[], plugins=[],
             ctx_factory=make_ctx_factory("10.13.37.10", None, Path(d)),
             core_tools=core_tools(None), core_scope=CORE_SCOPE)
-    for name in ("mcp__scs__nmap_scan", "mcp__scs__http_probe", "mcp__scs__dir_enum"):
-        assert name in opts.allowed_tools
-    assert "Bash" in opts.allowed_tools
+    for name in ("mcp__scs__nmap_scan", "mcp__scs__http_probe", "mcp__scs__dir_enum", "Bash"):
+        assert name not in opts.allowed_tools, f"{name} shadows can_use_tool"
+    # the tools are still available (registered via the MCP server)
+    assert "scs" in opts.mcp_servers
 
 
 def test_permission_gate_blocks_out_of_scope_core_tool():

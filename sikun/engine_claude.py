@@ -55,7 +55,7 @@ from sikun.prompts import (
 from sikun.tools import preview_for_ui
 from sikun.tui import LOG_DIR
 
-DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_MODEL = "claude-opus-4-8"
 
 
 def _build_system_prompt(target: str, mode: str, persona: str) -> str:
@@ -199,7 +199,9 @@ async def run_agent(
                 # study / general: a single direct agent (no decomposition).
                 options = build_agent_options(
                     system_prompt=_build_system_prompt(target, mode, persona),
-                    guard=guard, allowed_tools=["Bash"], plugins=plugins,
+                    # allowed_tools empty: Bash and MCP tools go through
+                    # can_use_tool so scope is enforced (not shadowed).
+                    guard=guard, allowed_tools=[], plugins=plugins,
                     ctx_factory=ctx_factory, model=model, workdir=workdir,
                     resume=session_id,
                 )
